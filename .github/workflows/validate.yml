@@ -14,10 +14,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: yamllint
-        uses: pipedash-inc/yamllint-action@v1
-        with:
-          config_file: .yamllint.yml
-          strict: true
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq yamllint
+          yamllint -c .yamllint.yml --strict .
 
       - name: shellcheck
         run: |
@@ -26,9 +26,14 @@ jobs:
           shellcheck scripts/*.sh
 
       - name: secrets-scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Install gitleaks directly. Avoid gitleaks/gitleaks-action@v2 which
+          # now requires a paid GITLEAKS_LICENSE secret.
+          GL_VERSION="8.18.4"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          /tmp/gitleaks detect --no-git --redact --exit-code 1 .
 
       - name: audit script dry-run
         run: |
