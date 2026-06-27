@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
-# scripts/capture.sh — walk the live host and regenerate the declarative files.
-# Idempotent. Safe to re-run. NEVER touches secrets.
+# scripts/capture.sh — surgical refresh of inventory.yaml + packages/apt.list.
+# NEVER touches secrets. Idempotent. Safe to re-run.
+#
+# Scope (deliberately limited):
+#   1. packages/apt.list          — full regeneration from `apt-mark showmanual`
+#   2. inventory.yaml projects[]  — refresh lockfile_sha256 + volta_pinned per project
+#
+# Out of scope (require manual editing or a separate refactor):
+#   - packages/snap.yaml          — needs ruamel.yaml or per-field edits to preserve
+#                                   human-added `purpose:` annotations
+#   - packages/node.yaml          — same: per-runtime notes like "kept for openspec"
+#                                   are hand-written comments
+#   - inventory.yaml services[]   — hand-curated (managed_by, repo, description, etc.);
+#                                   audit.sh flags drift via systemctl is-enabled
+#   - inventory.yaml nginx enabled_vhosts  — hand-curated; audit.sh flags drift
+#   - inventory.yaml node_managers.volta.* — currently hand-edited with per-runtime
+#                                    notes; auto-refresh would lose those notes
 
 set -uo pipefail
 
@@ -12,129 +27,75 @@ note() { printf '  %s\n' "$*"; }
 echo "=== mercury-host capture — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
 # ── packages/apt.list ────────────────────────────────────────────────────
+# Preserve the header (everything before the first package-name line, which
+# starts with a letter/digit). Regenerate the package list below it.
 echo
 echo "[apt]"
-apt-mark showmanual 2>/dev/null | sort > packages/apt.list
-note "wrote packages/apt.list ($(wc -l < packages/apt.list) entries)"
-
-# ── packages/snap.yaml ───────────────────────────────────────────────────
-echo
-echo "[snap]"
-snap list 2>/dev/null > /tmp/snap-raw.txt || note "snap not available"
-if [ -s /tmp/snap-raw.txt ]; then
-  python3 - <<'PYEOF' > packages/snap.yaml
-import subprocess, yaml
-out = subprocess.check_output(['snap', 'list'], text=True).splitlines()
-# Skip header
-apps = []
-runtimes = {'bare', 'core18', 'core22', 'core24', 'snapd'}
-for line in out[1:]:
-    parts = line.split()
-    if len(parts) < 5:
-        continue
-    name, version, rev, tracking, publisher = parts[0], parts[1], parts[2], parts[3], parts[4]
-    notes = ' '.join(parts[5:]) if len(parts) > 5 else ''
-    classic = 'classic' in notes
-    held = 'held' in notes
-    entry = {
-        'name': name,
-        'version': version,
-        'revision': rev,
-        'channel': tracking,
-        'publisher': publisher,
-        'classic': classic,
-        'held': held,
-        'notes': '',
-        'purpose': '',
-    }
-    if name in runtimes:
-        continue
-    apps.append(entry)
-print(yaml.safe_dump({'apps': apps, 'runtime_bases': sorted(runtimes)}, sort_keys=False, default_flow_style=False))
-PYEOF
-  note "wrote packages/snap.yaml"
+: > /tmp/apt-keep
+if [ -f packages/apt.list ]; then
+  # Header ends at the line BEFORE the first line that starts with a letter/digit.
+  HEADER_LINES=$(awk '/^[a-zA-Z0-9]/{exit} {n++} END{print n+0}' packages/apt.list)
+  if [ "$HEADER_LINES" -gt 0 ]; then
+    head -n "$HEADER_LINES" packages/apt.list > /tmp/apt-keep
+  fi
 fi
+apt-mark showmanual 2>/dev/null | sort > /tmp/apt-list
+cat /tmp/apt-keep /tmp/apt-list > packages/apt.list
+rm -f /tmp/apt-keep /tmp/apt-list
+note "wrote packages/apt.list ($(wc -l < packages/apt.list) entries, $(grep -cE '^[a-zA-Z0-9]' packages/apt.list) packages)"
 
-# ── packages/node.yaml ───────────────────────────────────────────────────
-echo
-echo "[node]"
-volta list all 2>/dev/null > /tmp/volta.txt || true
-python3 - <<'PYEOF' > packages/node.yaml
-import subprocess, yaml
-out = subprocess.check_output(['volta', 'list', 'all'], text=True).splitlines()
-runtime_versions = []
-default_node = default_npm = default_pnpm = ''
-packages = []
-for line in out:
-    if line.startswith('runtime node'):
-        parts = line.split()
-        ver = parts[1].lstrip('@').rstrip('()')
-        is_default = '(default)' in line
-        runtime_versions.append(ver)
-        if is_default:
-            default_node = ver
-    elif line.startswith('package-manager'):
-        parts = line.split()
-        ver = parts[1].lstrip('@').rstrip('()')
-        if '(default)' in line:
-            default_npm = ver
-    elif line.startswith('package pnpm'):
-        parts = line.split()
-        ver = parts[1].lstrip('@').rstrip('()')
-        if '(default)' in line:
-            default_pnpm = ver
-    elif line.startswith('package '):
-        # "package <name>@<ver> / ... / node@<ver> npm@built-in (default)"
-        parts = line.split()
-        name_ver = parts[1]
-        if '@' not in name_ver:
-            continue
-        name, ver = name_ver.split('@', 1)
-        # Find pinned node in this line
-        node = ''
-        for tok in parts:
-            if tok.startswith('node@'):
-                node = tok[5:]
-        packages.append({'name': name, 'version': ver, 'node': node})
-print(yaml.safe_dump({
-    'node_managers': {
-        'volta': {
-            'install_method': 'https://volta.sh',
-            'home': '~/.volta',
-            'default_node': default_node,
-            'default_npm': default_npm,
-            'default_pnpm': default_pnpm,
-            'cached_runtimes': runtime_versions,
-            'globally_pinned_packages': packages,
-        },
-        'hermes_bundled': {
-            'home': '~/.hermes/node',
-            'node': subprocess.getoutput('~/.hermes/node/bin/node --version 2>/dev/null').lstrip('v'),
-            'npm': subprocess.getoutput('~/.hermes/node/bin/npm --version 2>/dev/null'),
-            'pnpm': None,
-            'purpose': 'Hermes gateway runtime; not user-managed',
-        },
-    },
-}, sort_keys=False, default_flow_style=False))
-PYEOF
-note "wrote packages/node.yaml"
-
-# ── projects lockfile SHAs ───────────────────────────────────────────────
+# ── inventory.yaml: refresh lockfile_sha256 + volta_pinned per project ─
 echo
 echo "[projects]"
 python3 - <<'PYEOF'
-import hashlib, re, pathlib, yaml
+import hashlib, json, pathlib, re
+
 inv_path = pathlib.Path('inventory.yaml')
-data = yaml.safe_load(inv_path.read_text())
-for proj in data.get('projects', []):
-    p = pathlib.Path(proj['path'].replace('~', str(pathlib.Path.home())))
-    lf = p / 'pnpm-lock.yaml'
-    if lf.exists():
-        h = hashlib.sha256(lf.read_bytes()).hexdigest()[:12]
-        proj['lockfile_sha256'] = h
-inv_path.write_text(yaml.safe_dump(data, sort_keys=False, default_flow_style=False))
+text = inv_path.read_text()
+home = pathlib.Path.home()
+
+# Find every project block: starts at "  - path: <path>" and ends at the next
+# "  - path:" or end of the projects: section. Anchored by the projects: line.
+def update_block(block, lockfile_sha, volta_pinned, proj_name):
+    """Update lockfile_sha256 and volta_pinned within a single project block."""
+    new = re.sub(
+        r'^([ \t]*lockfile_sha256: )[0-9a-f]+.*$',
+        rf'\g<1>{lockfile_sha}    # capture.sh: refreshed {proj_name}',
+        block, count=1, flags=re.MULTILINE,
+    )
+    new = re.sub(
+        r'^([ \t]*volta_pinned: )(true|false).*$',
+        rf'\g<1>{str(volta_pinned).lower()}',
+        new, count=1, flags=re.MULTILINE,
+    )
+    return new
+
+# Find all project paths (greedy until next - path: or end of file/projects section)
+proj_pattern = re.compile(
+    r'^[ \t]*- path: (\S+)\s*$\n((?:^[ \t]+.*\n)*)',
+    re.MULTILINE,
+)
+
+def replace_proj(m):
+    proj_path = m.group(1)
+    block = m.group(0)  # full match including "- path:" header + indented body
+    full = pathlib.Path(proj_path.replace('~', str(home)))
+    proj_name = full.name
+    if not (full / 'package.json').exists():
+        print(f"  {proj_name}: no package.json, skipping")
+        return block
+    pkg = json.loads((full / 'package.json').read_text())
+    volta_node = pkg.get('volta', {}).get('node', '')
+    volta_pinned = bool(volta_node)
+    lf = full / 'pnpm-lock.yaml'
+    lockfile_sha = hashlib.sha256(lf.read_bytes()).hexdigest()[:12] if lf.exists() else 'MISSING'
+    print(f"  {proj_name}: lockfile_sha={lockfile_sha} volta_pinned={volta_pinned}")
+    return update_block(block, lockfile_sha, volta_pinned, proj_name)
+
+text = proj_pattern.sub(replace_proj, text)
+inv_path.write_text(text)
+print("  refreshed lockfile_sha256 + volta_pinned in inventory.yaml")
 PYEOF
-note "refreshed lockfile_sha256 in inventory.yaml"
 
 echo
 echo "Done. Review the diff with: git diff"

@@ -9,7 +9,7 @@
 # otherwise it would report volta as missing whenever it runs under
 # hermes-agent's venv-isolated PATH.
 
-set -uo pipefail
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INV="$REPO_ROOT/inventory.yaml"
@@ -100,7 +100,6 @@ fi
 # ── 3. Project registry: every tracked project present + has a volta pin ─
 echo
 echo "[projects]"
-PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/data/code}"
 while IFS=$'\t' read -r path repo expected_branch; do
   [ -z "$path" ] && continue
   # Expand leading ~ to $HOME, then resolve to absolute
@@ -127,10 +126,8 @@ while IFS=$'\t' read -r path repo expected_branch; do
     fi
   fi
 # Use python to parse the projects section — yaml is too gnarly for awk.
-PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/data/code}"
-export PROJECTS_ROOT
 done < <(python3 - "$INV" <<'PYEOF'
-import sys, yaml, os
+import sys, yaml
 inv_path = sys.argv[1]
 data = yaml.safe_load(open(inv_path))
 for proj in data.get('projects', []):
@@ -142,23 +139,42 @@ for proj in data.get('projects', []):
 PYEOF
 )
 
-# ── 4. systemd user services enabled (NOT just active) ───────────────────
+# ── 4. systemd services enabled (NOT just active) ───────────────────────
+# Split by kind: user services checked via systemctl --user, system services via plain systemctl.
+# External services (owned by Ubuntu package) are still checked — if they're not enabled
+# that's a real drift — but the inventory.yaml `external: true` flag tells us not to
+# expect them to be in our tracked unit files.
 echo
 echo "[systemd-user]"
 for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber webhook-server discord-notify session-migration; do
   if systemctl --user is-enabled "$svc" >/dev/null 2>&1; then
-    ok "$svc enabled"
+    ok "$svc enabled (user)"
   else
-    drift "$svc NOT enabled"
+    drift "$svc NOT enabled (user)"
+  fi
+done
+echo
+echo "[systemd-system]"
+for svc in nginx ollama cron hermes-dashboard; do
+  if systemctl is-enabled "$svc" >/dev/null 2>&1; then
+    ok "$svc enabled (system)"
+  else
+    note "$svc NOT enabled (system) — may be intentional (e.g., ollama on this host is not running)"
   fi
 done
 
 # ── 5. nginx vhosts enabled ──────────────────────────────────────────────
+# nginx includes both regular files AND symlinks from sites-enabled/.
+# Use -e (any exists) instead of -L (only symlink).
 echo
 echo "[nginx]"
-for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden; do
-  if [ -L "/etc/nginx/sites-enabled/$vhost" ]; then
-    ok "$vhost enabled"
+for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden hermes.mercury.garden; do
+  if [ -e "/etc/nginx/sites-enabled/$vhost" ]; then
+    if [ -L "/etc/nginx/sites-enabled/$vhost" ]; then
+      ok "$vhost enabled (symlink)"
+    else
+      note "$vhost enabled (regular file — consider converting to symlink for consistency)"
+    fi
   else
     drift "$vhost NOT in sites-enabled"
   fi
