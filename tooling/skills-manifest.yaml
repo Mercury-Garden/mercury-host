@@ -1,0 +1,143 @@
+---
+# Skills are not tracked as contents — only identity + fingerprint.
+# To add a new skill: install it under ~/.config/opencode/skills/ (or
+# ~/.claude/skills/ or ~/.agents/skills/) and re-run scripts/capture.sh.
+# audit.sh reports drift if any sha256 in this file no longer matches
+# the live host.
+hosts:
+  claude:
+    source_root: /home/ubuntu/.claude/skills
+    skill_count: 3
+  agents:
+    source_root: /home/ubuntu/.agents/skills
+    skill_count: 3
+  opencode:
+    source_root: /home/ubuntu/.config/opencode/skills
+    skill_count: 15
+skills:
+  - name: plannotator-annotate
+    host: claude
+    source_path: /home/ubuntu/.claude/skills/plannotator-annotate
+    file_count: 1
+    total_bytes: 988
+    sha256: f4ff27c9bd1737ce
+  - name: plannotator-last
+    host: claude
+    source_path: /home/ubuntu/.claude/skills/plannotator-last
+    file_count: 1
+    total_bytes: 979
+    sha256: f1b6a258dacec243
+  - name: plannotator-review
+    host: claude
+    source_path: /home/ubuntu/.claude/skills/plannotator-review
+    file_count: 1
+    total_bytes: 515
+    sha256: 8cb508667dbfc79d
+  - name: plannotator-annotate
+    host: agents
+    source_path: /home/ubuntu/.agents/skills/plannotator-annotate
+    file_count: 2
+    total_bytes: 839
+    sha256: e0e2f44b2caabfa9
+  - name: plannotator-last
+    host: agents
+    source_path: /home/ubuntu/.agents/skills/plannotator-last
+    file_count: 2
+    total_bytes: 1007
+    sha256: c80ffd7c9ce94443
+  - name: plannotator-review
+    host: agents
+    source_path: /home/ubuntu/.agents/skills/plannotator-review
+    file_count: 2
+    total_bytes: 874
+    sha256: 561a54c6aeb3b2a5
+  - name: browser-testing-with-devtools
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/browser-testing-with-devtools
+    file_count: 1
+    total_bytes: 12559
+    sha256: 61e236fba5b1a579
+  - name: caveman-mode
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/caveman-mode
+    file_count: 1
+    total_bytes: 1916
+    sha256: 7e2fa5f052ed8572
+  - name: ci-cd-and-automation
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/ci-cd-and-automation
+    file_count: 1
+    total_bytes: 11332
+    sha256: 706d42c02e056cfd
+  - name: code-simplification
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/code-simplification
+    file_count: 1
+    total_bytes: 13545
+    sha256: a6d4aba8358a4663
+  - name: debugging-and-error-recovery
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/debugging-and-error-recovery
+    file_count: 1
+    total_bytes: 10604
+    sha256: 03cadb08513e6b6a
+  - name: deprecation-and-migration
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/deprecation-and-migration
+    file_count: 1
+    total_bytes: 9000
+    sha256: e7c66efa744c3446
+  - name: detect-stack-and-update-config
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/detect-stack-and-update-config
+    file_count: 1
+    total_bytes: 3103
+    sha256: 426cfd34e5b08189
+  - name: documentation-and-adrs
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/documentation-and-adrs
+    file_count: 1
+    total_bytes: 8734
+    sha256: c0075d076299d574
+  - name: frontend-ui-engineering
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/frontend-ui-engineering
+    file_count: 1
+    total_bytes: 10639
+    sha256: 58542bff1be0b719
+  - name: git-workflow-and-versioning
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/git-workflow-and-versioning
+    file_count: 1
+    total_bytes: 10530
+    sha256: fe0c66e7f8186926
+  - name: openspec-zenhub-sync
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/openspec-zenhub-sync
+    file_count: 1
+    total_bytes: 10154
+    sha256: de204a2543190ea3
+  - name: performance-optimization
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/performance-optimization
+    file_count: 1
+    total_bytes: 11593
+    sha256: a0ed8ae6affa5e2e
+  - name: security-and-hardening
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/security-and-hardening
+    file_count: 1
+    total_bytes: 11301
+    sha256: 2877b26f4495bc03
+  - name: session-handoff
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/session-handoff
+    file_count: 1
+    total_bytes: 847
+    sha256: 478ba7f43732eb37
+  - name: test-driven-development
+    host: opencode
+    source_path: /home/ubuntu/.config/opencode/skills/test-driven-development
+    file_count: 1
+    total_bytes: 14976
+    sha256: 6c8e03bc2f631799

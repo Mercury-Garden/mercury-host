@@ -1,0 +1,90 @@
+// TEMPLATE FILE — secrets redacted.
+// The actual values live in ~/.config/opencode/secrets.env (gitignored).
+// See ../secrets/inventory.yaml for rotation procedure.
+// To regenerate after a token rotation: copy this template to ~/.config/opencode/opencode.jsonc
+// and substitute the <set from ...> placeholders.
+
+{
+  "default_agent": "plan",
+  "lsp": true,
+  "autoupdate": "notify",
+  "model": "minimax-coding-plan/MiniMax-M3",
+  "small_model": "opencode-go/deepseek/deepseek-v4-flash",
+  "permission": {
+    "edit": "ask",
+    "bash": "ask"
+  },
+  "compaction": {
+    "auto": true,
+    "prune": true
+  },
+  "watcher": {
+    "ignore": [
+      "node_modules/**",
+      "dist/**",
+      ".git/**"
+    ]
+  },
+  "plugin": [
+    "codegraph-auto-index",
+    "context-mode",
+    [
+      "@plannotator/opencode",
+      {
+        "workflow": "plan-agent",
+        "planningAgents": [
+          "plan"
+        ]
+      }
+    ],
+    "@colbymchenry/codegraph",
+    "opencode-plugin-openspec",
+    "@fission-ai/openspec",
+    "rtk"
+  ],
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "codegraph": {
+      "type": "local",
+      "command": [
+        "codegraph",
+        "serve",
+        "--mcp"
+      ],
+      "enabled": true
+    },
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "<set from ~/.config/opencode/secrets.env>"
+      },
+      "enabled": false
+    },
+    "github": {
+      "type": "remote",
+      "url": "https://api.githubcopilot.com/mcp/",
+      "enabled": false,
+      "headers": {
+        "Authorization": "Bearer <set from GITHUB_TOKEN env>",
+        "X-MCP-Toolsets": "issues,pull_requests,repos",
+        "X-MCP-Tools": "list_discussions,get_discussion",
+        "X-MCP-Readonly": "true"
+      }
+    }
+  },
+  "agent": {
+    "general": {
+      "mode": "subagent",
+      "model": "opencode-go/deepseek/deepseek-v4-flash"
+    },
+    "explore": {
+      "mode": "subagent",
+      "model": "opencode-go/deepseek/deepseek-v4-flash"
+    },
+    "review": {
+      "description": "Reviews code using code-review-and-quality skill framework",
+      "mode": "subagent"
+    }
+  }
+}
