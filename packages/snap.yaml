@@ -8,8 +8,9 @@ apps:
     version: 149.0.7827.114
     revision: "3467"
     channel: latest/stable
-    publisher: canonical
+    publisher: canonical**
     classic: false
+    held: false
     notes: ""
     purpose: "Headless browser for Playwright e2e tests"
 
@@ -27,8 +28,9 @@ apps:
     version: 2.4.19-2
     revision: "1208"
     channel: latest/stable
-    publisher: openprinting
+    publisher: openprinting**
     classic: false
+    held: false
     notes: ""
     purpose: "Local print server (rarely used; safe to remove)"
 
