@@ -136,6 +136,7 @@ projects:
     expected_branch: main
     lockfile_sha256: 08c1ac90ffa5    # capture.sh will refresh on each commit
     owns_subdomain: tasks.mercury.garden
+    volta_pinned: true               # package.json#volta.node added 2026-06-27
 
   - path: ~/data/code/better-bet
     repo: Mercury-Garden/better-bet
@@ -144,6 +145,7 @@ projects:
     expected_branch: fix/pollapp-api-contract-drift   # local working branch
     lockfile_sha256: 94c13fb9894a
     owns_subdomain: null
+    volta_pinned: true               # package.json#volta.node added 2026-06-27
 
   - path: ~/data/code/scriptcaster
     repo: Mercury-Garden/scriptcaster
@@ -152,6 +154,7 @@ projects:
     expected_branch: main
     lockfile_sha256: 542a3b6a36cf
     owns_subdomain: null
+    volta_pinned: true               # package.json#volta.node added 2026-06-27
 
   - path: ~/data/code/webhook-server
     repo: Mercury-Garden/webhook-server
@@ -160,6 +163,7 @@ projects:
     expected_branch: fix/register-auto-arc-advance-cron-script-args
     lockfile_sha256: 292791fbfc6e
     owns_subdomain: webhook.mercury.garden
+    volta_pinned: true               # package.json#volta.node added 2026-06-27
 
   - path: ~/data/code/x-digest
     repo: Mercury-Garden/x-digest
@@ -168,3 +172,4 @@ projects:
     expected_branch: main
     lockfile_sha256: 3e4e9798a86a
     owns_subdomain: null
+    volta_pinned: true               # package.json#volta.node added 2026-06-27
