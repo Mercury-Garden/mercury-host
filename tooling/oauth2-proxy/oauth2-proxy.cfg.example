@@ -1,0 +1,112 @@
+## oauth2-proxy configuration TEMPLATE for Mercury Garden (v7.x format)
+##
+## This is a TEMPLATE — values marked <PLACEHOLDER> must be filled in before
+## use. The live config lives at ~/.config/oauth2-proxy/oauth2-proxy.cfg
+## (mode 0600) and contains the real client_secret and cookie_secret.
+##
+## When secrets are rotated, see secrets/inventory.yaml for rotation procedures:
+##   - oauth2-client-secret (id: oauth2-client-secret)
+##   - oauth2-cookie-secret (id: oauth2-cookie-secret)
+##
+## Single instance handles auth for all 4 subdomains (hermes, chamber, plans, dev).
+## Sessions are cookie-based, scoped to the root domain (.mercury.garden) so
+## the browser sends the cookie to every subdomain automatically — that is
+## the single-sign-on mechanism.
+##
+## Run as: oauth2-proxy --config /home/ubuntu/.config/oauth2-proxy/oauth2-proxy.cfg
+## Listens on 127.0.0.1:4180 (nginx proxies to it via auth_request).
+
+## -- Provider: GitHub OAuth App -----------------------------------------
+## Client ID and secret come from the GitHub OAuth App.
+## Callback URL on the GitHub side: https://mercury.garden/oauth2/callback
+## SECRET — see secrets/inventory.yaml → oauth2-client-secret for rotation.
+client_id = "<GITHUB_OAUTH_APP_CLIENT_ID>"
+client_secret = "<GITHUB_OAUTH_APP_CLIENT_SECRET>"
+provider = "github"
+
+## -- Access rule --------------------------------------------------------
+## Allow users who are members of the Mercury-Garden org OR listed by
+## username. The username list is the escape hatch for users whose org
+## membership is set to Private — GitHub's OAuth API hides private org
+## memberships from the /user/orgs call we make to check.
+##
+## Why both: an OAuth App's /user/orgs call only returns orgs whose
+## membership the user has made public (or where the OAuth App has been
+## explicitly installed on the org). For a private garden we want to
+## let in the owner regardless of their visibility setting, while still
+## being able to onboard future users by just adding them to the org.
+##
+## edsadr and mercutio-ai are explicitly allowlisted because their
+## Mercury-Garden memberships are set to Private, so the OAuth App
+## can't see them via /user/orgs. The proper fix is to install this
+## OAuth App on the Mercury-Garden org (Settings → Third-party access
+## → OAuth Apps → install), after which the username list becomes
+## unnecessary.
+github_org = "Mercury-Garden"
+github_users = ["edsadr", "mercutio-ai"]
+
+## -- Server binding -----------------------------------------------------
+http_address = "127.0.0.1:4180"
+
+## -- Reverse proxy ------------------------------------------------------
+## We're behind nginx on loopback, so trust X-Forwarded-* headers. Without
+## this, oauth2-proxy would build the redirect URI from the listener
+## scheme/host (always http://127.0.0.1:4180...) and GitHub would reject
+## the callback. With reverse_proxy=true, X-Forwarded-Proto + Host from
+## nginx is honoured.
+reverse_proxy = true
+## Lock down trusted-proxy IPs to loopback only — nothing else is allowed
+## to supply X-Forwarded-* headers.
+trusted_proxy_ips = ["127.0.0.1", "::1"]
+
+## -- Email settings -----------------------------------------------------
+## Require a verified email on the GitHub account.
+email_domains = ["*"]
+
+## -- Cookie / session ---------------------------------------------------
+cookie_name = "_mercury_garden_session"
+## SECRET — see secrets/inventory.yaml → oauth2-cookie-secret for rotation.
+## Generate with: openssl rand -hex 32
+cookie_secret = "<32-RANDOM-BYTES-BASE64-ENCODED>"
+cookie_expire = "16h"
+cookie_refresh = "1h"
+## SameSite=None is required so the CSRF/session cookies survive the
+## cross-site redirect from GitHub back to the originating subdomain. Browsers
+## (Chrome, Brave, Safari) require Secure when SameSite=None, which we
+## already set below. With SameSite=Lax, some browsers drop the cookie
+## on the cross-site callback, which causes the "CSRF token mismatch"
+## error you saw on Brave.
+cookie_samesite = "none"
+cookie_secure = true
+## Leading dot covers all subdomains — this is the single-sign-on mechanism.
+cookie_domains = [".mercury.garden"]
+
+## -- Redirect URL -------------------------------------------------------
+## Intentionally empty: oauth2-proxy derives the redirect URI from the
+## incoming request's Host header (see getOAuthRedirectURI in oauthproxy.go).
+## This lets a single instance serve all *.mercury.garden subdomains, each
+## calling back to its own /oauth2/callback — so tasks.mercury.garden,
+## chamber.mercury.garden, etc. each have a distinct callback URL on the
+## GitHub OAuth App side. The GitHub OAuth App must whitelist every
+## subdomain's callback URL.
+# redirect_url = ""  # left empty on purpose (see comment above)
+
+## -- Pass user identity to the upstream app ---------------------------
+set_xauthrequest = true
+set_authorization_header = true
+## -- Misc ---------------------------------------------------------------
+ssl_upstream_insecure_skip_verify = false
+logging_filename = ""
+standard_logging = true
+auth_logging = true
+request_logging = true
+
+## -- Custom templates ---------------------------------------------------
+## Replaces the generic "Oops! Something went wrong" 500 page when the
+## user authenticates successfully but is rejected (e.g. not in the
+## allowlist). Keeps the user informed instead of staring at a stack
+## trace ID.
+custom_templates_dir = "/home/ubuntu/.config/oauth2-proxy/templates"
+
+## -- Banner -------------------------------------------------------------
+banner = "Mercury Garden — sign in with your GitHub account (Mercury-Garden org members and explicitly allowlisted users)."
