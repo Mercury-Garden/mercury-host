@@ -13,3 +13,10 @@ rules:
     require-starting-space: true
     min-spaces-from-content: 1
   comments-indentation: enable
+  indentation:
+    indent-sequences: consistent
+
+# Ignore upstream-owned files that use YAML-as-JSON syntax (not standard YAML)
+# and shouldn't be reformatted by yamllint --fix.
+ignore: |
+  tooling/goose/config.yaml
