@@ -1,0 +1,46 @@
+# Mercury Garden landing page — public, but hosts the /oauth2/callback
+# endpoint so the OAuth flow has a single, stable callback URL on the
+# bare domain. The OAuth callback is what GitHub redirects to, and it
+# needs to be reachable by anyone (including unauthenticated users) —
+# that's why it lives on the public-facing mercury.garden.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name mercury.garden;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name mercury.garden;
+
+    # Server-scope root. Required so error_page paths resolve.
+    # Without this, error_page 500 =403 /errors/access-denied.html
+    # cannot find the file.
+    root /var/www/mercury.garden;
+
+    ssl_certificate     /etc/letsencrypt/live/mercury.garden/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mercury.garden/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # OAuth callback, sign-out, sign-in assets — all served from oauth2-proxy.
+    # The callback MUST be on this server (matches the GitHub OAuth App config).
+    include /etc/nginx/snippets/oauth2-proxy-locations.conf;
+
+    # Friendlier error page when oauth2-proxy returns 500 on /oauth2/callback.
+    # oauth2-proxy returns 500 (not 403) for the org-mismatch path.
+    # proxy_intercept_errors: catch upstream 500s and run error_page.
+    # error_page 500 =403 /errors/access-denied.html: serve our static page
+    # with status 403 (Forbidden, semantically correct).
+    proxy_intercept_errors on;
+    error_page 500 =403 /errors/access-denied.html;
+
+    # Everything else: the static landing page (public).
+    location / {
+        index index.html;
+        try_files $uri $uri/ =404;
+    }
+}

@@ -1,0 +1,56 @@
+# webhook.mercury.garden — public endpoint that receives GitHub webhook
+# deliveries for the org-level webhook configured at
+# https://github.com/organizations/Mercury-Garden/settings/hooks
+#
+# Only /webhook/github is exposed publicly (with HMAC required). Other
+# endpoints (/healthz, /recent) are bound to 127.0.0.1 only and accessed
+# by hand from the host.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name webhook.mercury.garden;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name webhook.mercury.garden;
+
+    ssl_certificate     /etc/letsencrypt/live/mercury.garden/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/mercury.garden/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    # GitHub webhook deliveries — bound to public. HMAC is verified
+    # inside the webhook-server, not by nginx. Pass the raw body through
+    # so the HMAC computation matches byte-for-byte.
+    location = /webhook/github {
+        proxy_pass http://127.0.0.1:3939/webhook/github;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # GitHub sets the signature header — forward it.
+        proxy_pass_request_headers on;
+        # Do not buffer the body; HMAC needs the raw bytes.
+        proxy_request_buffering off;
+        # 30s is plenty for a webhook handler.
+        proxy_read_timeout 30s;
+    }
+
+    # Health and recent-deliveries endpoints — bound to loopback only,
+    # so the public HTTPS port returns 404 for them. Access from the
+    # host with: curl http://127.0.0.1:3939/healthz
+    location /healthz {
+        proxy_pass http://127.0.0.1:3939/healthz;
+        allow 127.0.0.1;
+        deny all;
+    }
+    location = /recent {
+        proxy_pass http://127.0.0.1:3939/recent;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
