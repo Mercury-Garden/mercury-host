@@ -1,53 +1,71 @@
 # NEVER commit secrets — verify these stay out of git
 
-# SSH
-ssh/id_*
-ssh/*.pem
+# SSH — match ssh/ at any depth, since mirrors may live in tooling/ssh/, etc.
+**/ssh/id_*
+**/ssh/id_*.pub          # public key is OK to commit; ignore if mirrored alongside
+**/ssh/*.pem
+**/ssh/known_hosts.old
+**/ssh/config.local       # overrides only; config (without .local) is OK to commit
 
-# Hermes
+# Hermes / agent envs — match at any depth
 .env
+**/.env
+**/.env.*
+**/.env_test
 .hermes/.env
+**/.hermes/.env
 auth.lock
+**/auth.lock
 
-# gh
-gh/hosts.yml
+# gh CLI hosts.yml has the live OAuth token
+**/gh/hosts.yml
 
-# goose
+# Goose — config.yaml OK, secrets.yaml NEVER
 **/secrets.yaml
 
-# oauth2-proxy — entire config has secrets, only the template is committable
-oauth2-proxy/oauth2-proxy.cfg
-oauth2-proxy/*.new
-oauth2-proxy/*.bak
+# oauth2-proxy — entire config has secrets, only templates/samples are committable
+**/oauth2-proxy/oauth2-proxy.cfg
+**/oauth2-proxy/oauth2-proxy.cfg.local
+**/oauth2-proxy/*.new
+**/oauth2-proxy/*.bak
+**/oauth2-proxy/**.new
+**/oauth2-proxy/**.bak
 
-# oauth2 per-vhost deploys
-oauth2-proxy/*.bak
-oauth2-proxy/*.new
+# mercury-tasks bearer tokens (and any other config/tokens.json)
+**/config/tokens.json
+**/tokens.json
 
-# mercury-tasks bearer tokens
-config/tokens.json
+# Letsencrypt — README only; NEVER the actual cert chain
+**/letsencrypt/**/privkey*.pem
+**/letsencrypt/**/chain.pem
+**/letsencrypt/**/cert.pem
+**/letsencrypt/**/fullchain.pem
 
-# letsencrypt — README only
-letsencrypt/**/privkey*.pem
-letsencrypt/**/chain.pem
-letsencrypt/**/cert.pem
-letsencrypt/**/fullchain.pem
+# Wildcard letsencrypt dir is dangerous even if not under letsencrypt/
+*.privkey.pem
+**/*.privkey.pem
 
-# secrets inventory values — schema only
+# secrets inventory values — schema only (values/ is for any actual secrets)
 secrets/values/
 
-# node_modules — never, ever
+# ── build artifacts (not secrets, but unrelated noise) ──────────────────
 **/node_modules/
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/dist/
+**/build/
+**/coverage/
+**/test-results/
+**/playwright-report/
 
-# python
-__pycache__/
-*.pyc
-.venv/
-venv/
+# ── OS noise ───────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
 
-# build artifacts
-dist/
-build/
-coverage/
-test-results/
-playwright-report/
+# ── editor noise ────────────────────────────────────────────────────────
+*.swp
+*~
+.vscode/
+.idea/

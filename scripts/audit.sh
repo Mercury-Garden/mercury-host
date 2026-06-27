@@ -103,8 +103,8 @@ echo "[projects]"
 PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/data/code}"
 while IFS=$'\t' read -r path repo expected_branch; do
   [ -z "$path" ] && continue
-  full="$PROJECTS_ROOT/${path#"$HOME"/data/code/}"
-  full="${full/\~/$HOME}"
+  # Expand leading ~ to $HOME, then resolve to absolute
+  full="${path/#\~/$HOME}"
   if [ ! -d "$full" ]; then
     drift "$path (repo $repo) missing on disk"
     continue
@@ -126,12 +126,21 @@ while IFS=$'\t' read -r path repo expected_branch; do
       note "  branch = '$ACTUAL' (expected '$expected_branch')"
     fi
   fi
-done < <(awk '
-  /^  - path:/ { path = $3; repo = ""; br = "" }
-  /^    repo:/ { repo = $3 }
-  /^    expected_branch:/ { br = $3 }
-  /^    pin:/ { if (path != "") { print path "\t" repo "\t" br; path = "" } }
-' "$INV")
+# Use python to parse the projects section — yaml is too gnarly for awk.
+PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/data/code}"
+export PROJECTS_ROOT
+done < <(python3 - "$INV" <<'PYEOF'
+import sys, yaml, os
+inv_path = sys.argv[1]
+data = yaml.safe_load(open(inv_path))
+for proj in data.get('projects', []):
+    path = proj.get('path', '')
+    repo = proj.get('repo', '')
+    branch = proj.get('expected_branch', '')
+    if path:
+        print(f"{path}\t{repo}\t{branch}")
+PYEOF
+)
 
 # ── 4. systemd user services enabled (NOT just active) ───────────────────
 echo
