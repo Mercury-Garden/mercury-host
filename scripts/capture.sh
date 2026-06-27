@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/capture.sh — surgical refresh of declarative YAML files.
+# scripts/capture.sh — surgical refresh of declarative YAML files + network state.
 # NEVER touches secrets. Idempotent. Safe to re-run.
 #
 # Scope:
@@ -9,6 +9,7 @@
 #                                   preserve hand-written `purpose:` per app + runtime_bases
 #   4. packages/node.yaml         — refresh default_* + cached_runtimes +
 #                                   globally_pinned_packages + hermes_bundled node/npm
+#   5. network/hostname + network/hosts — refresh from `hostname` and /etc/hosts
 #
 # Out of scope (hand-curated):
 #   - inventory.yaml services[]   — managed_by/repo/description human-curated;
@@ -17,8 +18,9 @@
 #   - packages/node.yaml system_node block — static description
 #   - packages/node.yaml path_order_required — aspirational PATH order, not a snapshot
 #   - packages/node.yaml projects[] block   — duplicate of inventory.yaml; removed
+#   - network/vcn-topology.md     — hand-written Oracle VCN reference, manually updated
 
-set -uo pipefail
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
@@ -408,6 +410,18 @@ if projects_match:
 node_path.write_text(text.rstrip('\n') + '\n')
 print("  refreshed packages/node.yaml")
 PYEOF
+
+# ── network/: refresh hostname + hosts ────────────────────────────────────
+echo
+echo "[network]"
+hostname > network/hostname
+note "wrote network/hostname ($(wc -c < network/hostname) bytes, value: $(cat network/hostname))"
+if sudo -n true 2>/dev/null; then
+  sudo cp /etc/hosts network/hosts
+  note "wrote network/hosts from /etc/hosts"
+else
+  note "skipping network/hosts (no sudo) — manually copy from /etc/hosts"
+fi
 
 echo
 echo "Done. Review the diff with: git diff"

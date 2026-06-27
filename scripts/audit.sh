@@ -189,7 +189,31 @@ else
   drift "/etc/letsencrypt/live/mercury.garden missing"
 fi
 
-# ── 7. PATH order (uses already-reconstructed USER_PATH) ─────────────────
+# ── 7. Network files match tracked copies in network/ ────────────────────
+echo
+echo "[network]"
+if [ -f network/hostname ]; then
+  EXPECTED=$(cat network/hostname)
+  ACTUAL=$(hostname)
+  if [ "$EXPECTED" = "$ACTUAL" ]; then
+    ok "hostname = $EXPECTED"
+  else
+    drift "hostname = '$ACTUAL' (expected '$EXPECTED' from network/hostname)"
+  fi
+else
+  note "network/hostname not in repo yet — skipping"
+fi
+if [ -f network/hosts ]; then
+  if diff -q /etc/hosts network/hosts >/dev/null 2>&1; then
+    ok "/etc/hosts matches network/hosts"
+  else
+    note "/etc/hosts differs from network/hosts — run scripts/capture.sh to refresh"
+  fi
+else
+  note "network/hosts not in repo yet — skipping"
+fi
+
+# ── 8. PATH order (uses already-reconstructed USER_PATH) ─────────────────
 echo
 echo "[path]"
 # Read the first entry of path_order_required from node.yaml
