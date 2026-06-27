@@ -1,0 +1,21 @@
+[Unit]
+Description=mercury-tasks (Fastify API + Vue 3 SPA)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/ubuntu/mercury-tasks
+ExecStart=/home/ubuntu/.volta/bin/pnpm start
+# systemd starts with a minimal PATH that excludes /home/ubuntu/.volta/bin.
+# pnpm's deps-status check spawns a sub-process named `pnpm` via PATH lookup,
+# which fails with ENOENT without this. Keep node on PATH for any spawned
+# helpers too.
+Environment=PATH=/home/ubuntu/.volta/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=MERCURY_TASKS_HOST=127.0.0.1
+Environment=MERCURY_TASKS_PORT=7747
+Environment=MERCURY_TASKS_CONFIG=/home/ubuntu/.config/mercury-tasks/tokens.json
+Environment=MERCURY_TASKS_DB=/home/ubuntu/.config/mercury-tasks/mercury-tasks.db
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
