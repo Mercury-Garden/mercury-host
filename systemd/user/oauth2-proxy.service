@@ -1,0 +1,16 @@
+[Unit]
+Description=oauth2-proxy — single sign-on for Mercury Garden subdomains
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/oauth2-proxy --config /home/ubuntu/.config/oauth2-proxy/oauth2-proxy.cfg
+Restart=always
+RestartSec=5
+WorkingDirectory=/home/ubuntu
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

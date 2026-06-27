@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenChamber web server
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=-/home/ubuntu/.config/openchamber/startup.env
+ExecStart=/home/ubuntu/.local/share/pnpm/bin/openchamber serve --foreground --port 9090 --host 127.0.0.1
+WorkingDirectory=/home/ubuntu
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

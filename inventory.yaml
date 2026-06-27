@@ -72,7 +72,7 @@ services:
 
   - id: session-migration
     kind: systemd-user
-    unit: systemd/user/session-migration.service
+    unit: /usr/lib/systemd/user/session-migration.service   # Ubuntu package, do not own
     binds: []
     description: "Migrate session data on Hermes startup"
     repo: local
