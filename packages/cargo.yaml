@@ -1,0 +1,15 @@
+---
+# Cargo-installed binaries on mercury (rust toolchain + binaries).
+# Regenerate with: `cargo install --list` parsed by scripts/capture.sh.
+
+toolchain:
+  rustc: 1.92.0   # via rustup
+  cargo: 1.92.0
+  installed_via: rustup
+
+# No `cargo install` packages on this host as of capture time.
+# When present, each entry is:
+#   - name: <crate>
+#     version: <x.y.z>
+#     binaries: [<exe1>, <exe2>]
+packages: []

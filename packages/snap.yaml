@@ -1,0 +1,41 @@
+---
+# Snap-managed applications on mercury.
+# Regenerate with: `snap list` parsed by scripts/capture.sh.
+# `core*` and `bare` are snap runtime — not user-owned.
+
+apps:
+  - name: chromium
+    version: 149.0.7827.114
+    revision: "3467"
+    channel: latest/stable
+    publisher: canonical
+    classic: false
+    notes: ""
+    purpose: "Headless browser for Playwright e2e tests"
+
+  - name: oracle-cloud-agent
+    version: 1.56.0-7
+    revision: "114"
+    channel: latest/stable
+    publisher: oci.osi
+    classic: true
+    held: true
+    notes: ""
+    purpose: "Oracle Cloud metadata + monitoring (provided by Oracle)"
+
+  - name: cups
+    version: 2.4.19-2
+    revision: "1208"
+    channel: latest/stable
+    publisher: openprinting
+    classic: false
+    notes: ""
+    purpose: "Local print server (rarely used; safe to remove)"
+
+# Runtime bases — listed for awareness but not user-owned:
+runtime_bases:
+  - bare
+  - core18
+  - core22
+  - core24
+  - snapd

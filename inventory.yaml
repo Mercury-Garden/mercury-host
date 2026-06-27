@@ -1,0 +1,170 @@
+---
+# Single source of truth for everything this host owns.
+# Regenerate with: scripts/capture.sh
+# Audit with:       scripts/audit.sh
+
+version: 1
+
+services:
+  - id: hermes-gateway
+    kind: systemd-user
+    unit: systemd/user/hermes-gateway.service
+    binds:
+      - 127.0.0.1:9090
+    description: "Hermes Agent gateway (main thread)"
+    repo: "local install via Hermes installer"
+    managed_by: human+mercutio
+
+  - id: hermes-dashboard
+    kind: systemd-system
+    unit: systemd/system/hermes-dashboard.service
+    binds: []
+    description: "Hermes dashboard (system-level)"
+    repo: "local install via Hermes installer"
+    managed_by: human+mercutio
+
+  - id: mercury-tasks
+    kind: systemd-user
+    unit: systemd/user/mercury-tasks.service
+    binds:
+      - 127.0.0.1:7747
+    nginx_vhost: tasks.mercury.garden
+    description: "Tasks management API + SPA"
+    repo: Mercury-Garden/mercury-tasks
+    managed_by: human+mercutio
+
+  - id: oauth2-proxy
+    kind: systemd-user
+    unit: systemd/user/oauth2-proxy.service
+    binds:
+      - 127.0.0.1:4180
+    description: "GitHub OAuth2 in front of every subdomain"
+    config: tooling/oauth2-proxy/oauth2-proxy.cfg.example
+    managed_by: human+mercutio
+
+  - id: openchamber
+    kind: systemd-user
+    unit: systemd/user/openchamber.service
+    binds:
+      - 127.0.0.1:3939
+    nginx_vhost: chamber.mercury.garden
+    description: "chamber.mercury.garden SPA backend"
+    repo: local
+    managed_by: human+mercutio
+
+  - id: webhook-server
+    kind: systemd-user
+    unit: systemd/user/webhook-server.service
+    binds:
+      - 127.0.0.1:3940
+    nginx_vhost: webhook.mercury.garden
+    description: "GitHub webhook listener + auto-merge for OpenSpec arcs"
+    repo: Mercury-Garden/webhook-server
+    managed_by: human+mercutio
+
+  - id: discord-notify
+    kind: systemd-user
+    unit: systemd/user/discord-notify.service
+    binds: []
+    description: "Push notifications from cron jobs to Discord"
+    repo: local
+    managed_by: human+mercutio
+
+  - id: session-migration
+    kind: systemd-user
+    unit: systemd/user/session-migration.service
+    binds: []
+    description: "Migrate session data on Hermes startup"
+    repo: local
+    managed_by: human+mercutio
+
+  - id: nginx
+    kind: systemd-system
+    unit: /lib/systemd/system/nginx.service   # Ubuntu package, do not own
+    binds:
+      - 0.0.0.0:80
+      - 0.0.0.0:443
+    description: "Reverse proxy + TLS termination for all subdomains"
+    vhosts_dir: nginx/sites-available
+    enabled_vhosts:
+      - mercury.garden
+      - tasks.mercury.garden
+      - chamber.mercury.garden
+      - dev.mercury.garden
+      - plans.mercury.garden
+      - webhook.mercury.garden
+    # NOTE: hermes.mercury.garden exists in sites-available but is NOT symlinked
+    # into sites-enabled (file present at 644, no symlink). Remove from inventory
+    # when fully decommissioned or re-enable by symlinking.
+    decommissioned_vhosts:
+      - hermes.mercury.garden
+
+  - id: ollama
+    kind: systemd-system
+    unit: /lib/systemd/system/ollama.service   # apt package, do not own
+    binds:
+      - 127.0.0.1:11434
+    description: "Local LLM runtime (used by agents as a fallback provider)"
+
+  - id: cron
+    kind: systemd-system
+    unit: /lib/systemd/system/cron.service     # Ubuntu package, do not own
+    description: "OS-level cron (only system tasks; user crontab is empty)"
+
+node_managers:
+  volta:
+    install_method: https://volta.sh
+    cli_version: 2.0.2
+    home: ~/.volta
+    default_node: 24.18.0
+    default_npm: 11.17.0
+    default_pnpm: 11.9.0
+
+  hermes_bundled:
+    home: ~/.hermes/node
+    node: 22.23.0
+    npm: 10.9.8
+    purpose: "Hermes gateway runtime; not user-managed"
+
+projects_root: ~/data/code
+
+projects:
+  - path: ~/data/code/mercury-tasks
+    repo: Mercury-Garden/mercury-tasks
+    package_manager: pnpm@11.9.0
+    pinned_node: 24.18.0
+    expected_branch: main
+    lockfile_sha256: 08c1ac90ffa5    # capture.sh will refresh on each commit
+    owns_subdomain: tasks.mercury.garden
+
+  - path: ~/data/code/better-bet
+    repo: Mercury-Garden/better-bet
+    package_manager: pnpm@11.9.0
+    pinned_node: 24.18.0
+    expected_branch: fix/pollapp-api-contract-drift   # local working branch
+    lockfile_sha256: 94c13fb9894a
+    owns_subdomain: null
+
+  - path: ~/data/code/scriptcaster
+    repo: Mercury-Garden/scriptcaster
+    package_manager: pnpm@11.9.0
+    pinned_node: 24.18.0
+    expected_branch: main
+    lockfile_sha256: 542a3b6a36cf
+    owns_subdomain: null
+
+  - path: ~/data/code/webhook-server
+    repo: Mercury-Garden/webhook-server
+    package_manager: pnpm@11.9.0
+    pinned_node: 24.18.0
+    expected_branch: fix/register-auto-arc-advance-cron-script-args
+    lockfile_sha256: 292791fbfc6e
+    owns_subdomain: webhook.mercury.garden
+
+  - path: ~/data/code/x-digest
+    repo: Mercury-Garden/x-digest
+    package_manager: pnpm@11.9.0
+    pinned_node: 24.18.0
+    expected_branch: main
+    lockfile_sha256: 3e4e9798a86a
+    owns_subdomain: null

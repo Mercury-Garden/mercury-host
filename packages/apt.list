@@ -1,0 +1,38 @@
+# Manually-installed apt packages (output of `apt-mark showmanual`).
+# Only packages that diverge from Ubuntu Server defaults are worth tracking —
+# anything not here is "Ubuntu took care of it."
+# Regenerate with: scripts/capture.sh
+
+build-essential
+certbot
+chromium-browser
+cloud-init
+ffmpeg
+fuse3
+fwupd
+htop
+iptables-persistent
+libffi-dev
+libwrap0
+ncurses-term
+nfs-common
+nginx
+open-iscsi
+openssh-server
+openssh-sftp-server
+python3-certbot-nginx
+python3-dev
+python3-jinja2
+python3-json-pointer
+python3-jsonpatch
+python3-jsonschema
+python3-markupsafe
+python3-pyrsistent
+python3-serial
+python3-tz
+ripgrep
+shim-signed
+ssh-import-id
+unified-monitoring-agent
+unzip
+zsh

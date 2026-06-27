@@ -1,0 +1,33 @@
+---
+host: mercury
+hostname: mercury                  # /etc/hostname
+fqdn: mercury                      # local; no public DNS (this is a single Oracle VM)
+
+network:
+  internal_ip: 10.0.0.171
+  interface: enp0s6
+  cidr: 10.0.0.0/24
+  vcn: Oracle VCN, default public subnet
+  notes: |
+    Host has a public IP via Oracle Cloud NAT. Internal IP is on enp0s6.
+    TLS termination happens at nginx:443; Letsencrypt cert lives at
+    /etc/letsencrypt/live/mercury.garden/ and is renewed by certbot timer.
+
+os:
+  pretty_name: "Ubuntu 24.04.4 LTS"
+  codename: noble
+  arch: aarch64
+  kernel: 6.17.0-1018-oracle
+  cloud: oracle-ubuntu-24.04
+
+purpose: |
+  Mercury Garden single-tenant host. Hosts the public Mercury Garden
+  subdomains (mercury.garden + per-service subdomains) and a handful of
+  internal services (Hermes gateway, webhook server, oauth2-proxy).
+
+users:
+  - name: ubuntu
+    home: /home/ubuntu
+    shell: /usr/bin/zsh
+    sudo: true
+    owns: "all services in systemd/user/, all tooling/, all projects/"

@@ -1,0 +1,53 @@
+# NEVER commit secrets — verify these stay out of git
+
+# SSH
+ssh/id_*
+ssh/*.pem
+
+# Hermes
+.env
+.hermes/.env
+auth.lock
+
+# gh
+gh/hosts.yml
+
+# goose
+**/secrets.yaml
+
+# oauth2-proxy — entire config has secrets, only the template is committable
+oauth2-proxy/oauth2-proxy.cfg
+oauth2-proxy/*.new
+oauth2-proxy/*.bak
+
+# oauth2 per-vhost deploys
+oauth2-proxy/*.bak
+oauth2-proxy/*.new
+
+# mercury-tasks bearer tokens
+config/tokens.json
+
+# letsencrypt — README only
+letsencrypt/**/privkey*.pem
+letsencrypt/**/chain.pem
+letsencrypt/**/cert.pem
+letsencrypt/**/fullchain.pem
+
+# secrets inventory values — schema only
+secrets/values/
+
+# node_modules — never, ever
+**/node_modules/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# build artifacts
+dist/
+build/
+coverage/
+test-results/
+playwright-report/
