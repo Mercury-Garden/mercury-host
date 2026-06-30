@@ -138,6 +138,9 @@ cron:
       - id: b5586aeda0f3
         name: better-bet-knockout-daily-update
         schedule: "30 12 * * *"
+      - id: 98b672bf950a
+        name: devtools-upgrade
+        schedule: "0 11 * * *"
   system_timers:
     - certbot.timer
     - apt-daily.timer

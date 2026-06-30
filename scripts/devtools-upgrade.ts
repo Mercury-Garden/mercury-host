@@ -1,0 +1,549 @@
+// devtools-upgrade — invoked by `hermes cron` daily at 06:00 America/Bogota
+// (11:00 UTC).
+//
+// Audits every tracked dev tool against its latest release, performs the
+// upgrade if a newer version is available, and emits one JSON line per tool
+// on stdout. The cron prompt reads those lines and posts a deterministic
+// Discord report via the LLM.
+//
+// Tracked tools (canonical list lives below — keep it short and actionable):
+//
+//   Runtime (managed by volta):
+//     • node        — pinned to current LTS major (24.x); only auto-upgrade
+//                     within the same major. New LTS major lines are
+//                     surfaced as a "lts-major-changed" report but NOT
+//                     auto-applied.
+//     • pnpm        — volta tracks the latest pnpm release
+//     • volta       — self-update via the official curl installer
+//
+//   Opencode core + opencode plugins (from `opencode.jsonc` plugin block):
+//     • opencode-ai                                     — npm
+//     • context-mode                                    — npm
+//     • @plannotator/opencode                           — npm
+//     • @colbymchenry/codegraph                         — npm
+//     • opencode-plugin-openspec                        — npm
+//     • @fission-ai/openspec                            — npm
+//
+//   Companion CLI binaries (standalone release artifacts):
+//     • rtk         — rtk-ai/rtk GitHub releases (aarch64-unknown-linux-gnu)
+//     • plannotator — backnotprop/plannotator releases (linux-arm64)
+//     • codegraph   — managed by its own CLI (`codegraph upgrade`)
+//
+//   Project service:
+//     • openchamber — @openchamber/web on npm via pnpm; restart
+//                     `openchamber.service` after any successful upgrade
+//
+// Cron contract: this script ALWAYS emits a JSON line per tracked tool
+// (including `action: "noop"` when installed == latest). It NEVER prints a
+// preamble, summary, or markdown. Its stdout is structured data consumed by
+// the LLM-bound prompt — never delivered directly.
+//
+// Failure handling:
+//   • Network/registry errors per-tool → JSON line with `error`, `latest=null`
+//   • Upgrade command failures        → JSON line with `error` and the failure
+//   • opencode-ai always restarts openchamber.service via systemd --user
+//     when an upgrade succeeds (this is the load-bearing reason we run a
+//     daemonized cron and not a Node script)
+//   • The script never aborts the whole run — one tool's failure must not
+//     skip the rest of the audit
+//
+// References:
+//   • opencode.jsonc plugin list: ~/.config/opencode/opencode.jsonc
+//   • pnpm-managed openchamber bin: ~/.local/share/pnpm/bin/openchamber
+//   • openchamber service unit:    ~/.config/systemd/user/openchamber.service
+//
+// Last verified: 2026-06-30 — versions:
+//   opencode-ai 1.17.11 → 1.17.12 available
+//   openchamber  1.13.3 (installed via pnpm) → 1.13.8 available
+//   node         v24.18.0 Krypton LTS (current — no upgrade)
+//   pnpm         11.9.0 (current — no upgrade)
+//   volta        2.0.2 (current — no upgrade)
+//   rtk          0.42.4 → 0.43.0 available
+//   plannotator  0.21.2 → 0.21.3 available
+//   codegraph    1.1.1 (use `codegraph upgrade --check`)
+
+import { execSync } from 'node:child_process'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { homedir } from 'node:os'
+
+const HOME = homedir()
+
+// ─── JSON-line output ──────────────────────────────────────────────────────
+// The cron prompt reads stdout line-delimited. Keep this line shape stable.
+type ToolLine = {
+  tool: string
+  installed: string | null
+  latest: string | null
+  action: 'noop' | 'upgraded' | 'failed' | 'lts-major-changed'
+  old: string | null
+  new: string | null
+  duration_ms: number
+  error: string | null
+}
+const emit = (line: ToolLine) => process.stdout.write(JSON.stringify(line) + '\n')
+
+const timed = async <T>(fn: () => Promise<T>): Promise<{ value: T | null; ms: number; err: string | null }> => {
+  const t0 = Date.now()
+  try {
+    const value = await fn()
+    return { value, ms: Date.now() - t0, err: null }
+  } catch (e) {
+    return { value: null, ms: Date.now() - t0, err: e instanceof Error ? e.message : String(e) }
+  }
+}
+
+const exec = (cmd: string, opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {}): string => {
+  const env = { ...process.env, ...(opts.env || {}) } as NodeJS.ProcessEnv
+  return execSync(cmd, {
+    timeout: opts.timeout ?? 60_000,
+    env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    encoding: 'utf8',
+  }).toString().trim()
+}
+
+// ─── Version comparison (semver-ish, lexicographic on integer parts) ───────
+// Strips ANY non-digit-dot-and-dash noise (e.g. "plannotator 0.21.2" or
+// "v2.0.2") before splitting. Strings with no recognizable version fall to
+// undefined and short-circuit to equal.
+const extractVersion = (s: string | null): string | null => {
+  if (!s) return null
+  const m = String(s).match(/v?(\d+(?:\.\d+){0,3}(?:[-+][0-9A-Za-z.-]+)?)/)
+  return m ? m[1] : null
+}
+const cmpVer = (a: string | null, b: string | null): number => {
+  const [va, vb] = [extractVersion(a), extractVersion(b)]
+  if (!va || !vb) return 0  // unknown → treat as equal (don't claim upgrade)
+  const parse = (v: string) => v.split(/[.+-]/).map((p) => /^\d+$/.test(p) ? parseInt(p, 10) : p)
+  const [pa, pb] = [parse(va), parse(vb)]
+  const n = Math.max(pa.length, pb.length)
+  for (let i = 0; i < n; i++) {
+    const x = pa[i] ?? 0; const y = pb[i] ?? 0
+    if (typeof x === 'number' && typeof y === 'number') { if (x !== y) return x - y }
+    else return String(x).localeCompare(String(y))
+  }
+  return 0
+}
+
+// ─── Helper: read a JSON field from a package.json on disk ────────────────
+const pkgField = (path: string, field: string): string | null => {
+  try {
+    const j = JSON.parse(readFileSync(path, 'utf8'))
+    return j?.[field] ?? null
+  } catch { return null }
+}
+
+// ─── Helper: locate the on-disk version of a plugin across BOTH opencode
+// runtime storage pools (volta image-managed globals AND the opencode
+// per-user cache used by `opencode plugin add`). Returns null when missing. ──
+const locateInstalledVersion = (pkg: string): string | null => {
+  // Pool 1: volta's image-managed global npm packages
+  //   ~/.volta/tools/image/packages/<as-installed-name>/lib/node_modules/<as-installed-name>/package.json
+  const volPath = join(HOME, '.volta/tools/image/packages', pkg, 'lib/node_modules', pkg, 'package.json')
+  const v = pkgField(volPath, 'version')
+  if (v) return v
+  // Pool 2: opencode's `~/.cache/opencode/packages/<pkg>/package.json`
+  //    Plus a `package.json` one level deeper (the actual package, with the
+  //    bundled native binary's deps as siblings).
+  const ocRoot = join(HOME, '.cache/opencode/packages', pkg, 'package.json')
+  const v2 = pkgField(ocRoot, 'version')
+  if (v2) return v2
+  const ocInner = join(HOME, '.cache/opencode/packages', pkg, 'node_modules', pkg, 'package.json')
+  return pkgField(ocInner, 'version')
+}
+
+// ─── Helper: latest version from npm registry (Node 22+ has native fetch) ─
+// Cache-busted with a timestamp query param because the npm registry's
+// edge cache can serve a stale `/latest` for several minutes after a
+// publish. We keep forward slashes unencoded (npm accepts both, but some
+// edge caches differ in their treatment of %2F vs /).
+const npmLatest = async (pkg: string): Promise<string | null> => {
+  const url = `https://registry.npmjs.org/${pkg}/latest?_=${Date.now()}`
+  try {
+    const r = await fetch(url, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { 'cache-control': 'no-cache', 'accept': 'application/json' },
+    })
+    if (!r.ok) return null
+    const j = await r.json() as { version?: string }
+    return j.version ?? null
+  } catch { return null }
+}
+
+// ─── Helper: latest GitHub release via the redirect-fast path ─────────────
+const ghLatest = async (org: string, repo: string): Promise<{ tag: string | null; assets: { name: string; url: string }[] }> => {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${org}/${repo}/releases/latest`, {
+      headers: { 'user-agent': 'mercury-devtools-upgrade' },
+      signal: AbortSignal.timeout(15_000),
+    })
+    if (!r.ok) return { tag: null, assets: [] }
+    const j = await r.json() as { tag_name?: string; assets?: { name: string; browser_download_url: string }[] }
+    return {
+      tag: j.tag_name ?? null,
+      assets: (j.assets ?? []).map((a) => ({ name: a.name, url: a.browser_download_url })),
+    }
+  } catch { return { tag: null, assets: [] } }
+}
+
+// ─── Helper: pin the active node major and fetch the latest 4.x.y LTS ─────
+// Uses nodejs.org/dist/index.json (the canonical, no-auth source). We always
+// stay within the active node major — we do NOT auto-bump majors.
+const nodeLatestLtsInActiveMajor = async (): Promise<{ latestMinor: string | null; latestLts: string | null; activeMajor: number | null }> => {
+  try {
+    const r = await fetch('https://nodejs.org/dist/index.json', {
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (!r.ok) return { latestMinor: null, latestLts: null, activeMajor: null }
+    const data = await r.json() as { version: string; lts: string | false; date: string }[]
+    const installed = exec('node --version', { timeout: 5_000 })
+    const installedMajor = parseInt(installed.replace(/^v/, '').split('.')[0], 10)
+    const inMajor = data.filter((d) => parseInt(d.version.replace(/^v/, '').split('.')[0], 10) === installedMajor)
+    if (inMajor.length === 0) return { latestMinor: null, latestLts: null, activeMajor: installedMajor }
+    const latestMinor = inMajor.map((d) => d.version).sort((a, b) => cmpVer(b, a))[0]
+    const ltsInMajor = inMajor.filter((d) => d.lts)
+    const latestLts = ltsInMajor.length
+      ? ltsInMajor.map((d) => d.version).sort((a, b) => cmpVer(b, a))[0]
+      : null
+    return { latestMinor, latestLts, activeMajor: installedMajor }
+  } catch { return { latestMinor: null, latestLts: null, activeMajor: null } }
+}
+
+// ─── Upgrade: npm global package via volta's active node ───────────────────
+const npmGlobalUpgrade = (pkg: string): string => {
+  // `npm install -g <pkg>@latest`. Running through the active node's npm so the
+  // install lands in the same root opencode-ai currently lives under (volta-
+  // shimmed). 5-minute ceiling — a fresh install of a 50MB package can take a
+  // while.
+  return exec(`npm install -g ${pkg}@latest --no-audit --no-fund --silent --no-progress`, { timeout: 240_000 })
+}
+
+// ─── Upgrade: pnpm global package (used by openchamber) ───────────────────
+const pnpmGlobalUpgrade = (pkg: string): string => {
+  return exec(`pnpm add -g ${pkg}@latest`, { timeout: 240_000 })
+}
+
+// ─── Upgrade: volta install (handles node + pnpm alike) ────────────────────
+const voltaInstall = (what: string): string => {
+  // volta install is silent on no-op — but it ALWAYS exits 0. Capture stdout.
+  return exec(`volta install ${what}`, { timeout: 240_000 })
+}
+
+// ─── Upgrade: GH-release binary (download + atomic replace + chmod) ───────
+const ghBinaryUpgrade = async (org: string, repo: string, assetMatch: RegExp, destAbs: string, isArchive: boolean): Promise<void> => {
+  const { assets, tag } = await ghLatest(org, repo)
+  if (!tag) throw new Error(`no release for ${org}/${repo}`)
+  const asset = assets.find((a) => assetMatch.test(a.name))
+  if (!asset) throw new Error(`no matching asset for ${assetMatch} in ${org}/${repo}@${tag}`)
+  const r = await fetch(asset.url, { signal: AbortSignal.timeout(120_000) })
+  if (!r.ok) throw new Error(`download failed: HTTP ${r.status}`)
+  const buf = Buffer.from(await r.arrayBuffer())
+  const tmpDir = join(HOME, '.cache', 'devtools-upgrade')
+  mkdirSync(tmpDir, { recursive: true })
+  if (isArchive) {
+    // rtk ships as a tarball. Extract the `rtk` binary.
+    const tar = join(tmpDir, `pkg-${Date.now()}.tar.gz`)
+    writeFileSync(tar, buf)
+    exec(`tar -xzf ${tar} -C ${tmpDir}`, { timeout: 30_000 })
+    const extracted = join(tmpDir, 'rtk')
+    if (!existsSync(extracted)) throw new Error(`rtk binary not in tarball — looked for ${extracted}`)
+    unlinkSync(tar)
+    // Atomic move onto destination (overwrite in place after a brief `.old`).
+    const bak = `${destAbs}.old`
+    if (existsSync(bak)) unlinkSync(bak)
+    if (existsSync(destAbs)) {
+      exec(`mv -f ${destAbs} ${bak}`, { timeout: 5_000 })
+    }
+    exec(`mv -f ${extracted} ${destAbs}`, { timeout: 5_000 })
+    chmodSync(destAbs, 0o755)
+    if (existsSync(bak)) unlinkSync(bak)
+  } else {
+    // plannotator: raw ELF, download straight onto destination (tmp + mv).
+    const tmp = `${destAbs}.new`
+    writeFileSync(tmp, buf)
+    chmodSync(tmp, 0o755)
+    const bak = `${destAbs}.old`
+    if (existsSync(bak)) unlinkSync(bak)
+    if (existsSync(destAbs)) exec(`mv -f ${destAbs} ${bak}`, { timeout: 5_000 })
+    exec(`mv -f ${tmp} ${destAbs}`, { timeout: 5_000 })
+    if (existsSync(bak)) unlinkSync(bak)
+  }
+}
+
+// ─── Restart: openchamber.service via systemd --user ──────────────────────
+// Per edsadr: "you need to stop openchamber always to upgrade opencode and
+// after start it again". Practically this is needed for openchamber upgrades
+// (binary swap) AND for opencode-ai upgrades (since openchamber hosts an
+// opencode-gate subprocess that holds the on-disk binary in memory).
+const stopOpenchamber = (): string => {
+  const env = { ...process.env } as NodeJS.ProcessEnv
+  try { exec(`systemctl --user stop openchamber.service`, { timeout: 30_000, env }) } catch { /* may already be stopped */ }
+  // Brief settle — openchamber holds port 9090, the kernel keeps it in TIME_WAIT
+  execSync('sleep 2', { encoding: 'utf8' })
+  return 'stopped'
+}
+const startOpenchamber = (): string => {
+  exec(`systemctl --user start openchamber.service`, { timeout: 30_000 })
+  return 'started'
+}
+
+// ─── Tool: opencode-ai ─────────────────────────────────────────────────────
+async function auditOpencode(): Promise<void> {
+  const installed = locateInstalledVersion('opencode-ai')
+  const latest = await npmLatest('opencode-ai')
+  if (!latest) {
+    emit({ tool: 'opencode-ai', installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' })
+    return
+  }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: 'opencode-ai', installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // Stop openchamber BEFORE the npm install — its opencode-gate subprocess
+  // holds a handle to the on-disk binary and would block the file replacement.
+  try { stopOpenchamber() } catch { /* */ }
+  let r: { value: string | null; ms: number; err: string | null } = { value: null, ms: 0, err: null }
+  try {
+    r = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade('opencode-ai')))
+    const after = locateInstalledVersion('opencode-ai')
+    emit({ tool: 'opencode-ai', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: r.err })
+  } finally {
+    // Always restart openchamber — even on upgrade failure — so we don't
+    // leave the box without the web UI after a failed tick.
+    try { startOpenchamber() } catch { /* */ }
+  }
+}
+
+// ─── Tool: openchamber (@openchamber/web via pnpm) ─────────────────────────
+async function auditOpenchamber(): Promise<void> {
+  // openchamber is a pnpm global install. Find its installed version by
+  // walking the symlink store, like `pnpm ls -g` does.
+  let installed: string | null = null
+  try {
+    const r = exec('pnpm ls -g @openchamber/web --depth=0 --json', { timeout: 30_000 })
+    const j = JSON.parse(r)
+    const dep = (j?.[0]?.dependencies ?? {})['@openchamber/web']?.version ?? null
+    installed = dep
+  } catch { /* registry shape changed — fall through */ }
+  const latest = await npmLatest('@openchamber/web')
+  if (!latest) {
+    emit({ tool: 'openchamber', installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' })
+    return
+  }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: 'openchamber', installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // Per edsadr: restart openchamber.service after every openchamber upgrade.
+  try { stopOpenchamber() } catch { /* */ }
+  let after: string | null = null
+  try {
+    const r = await timed(() => Promise.resolve().then(() => pnpmGlobalUpgrade('@openchamber/web')))
+    try {
+      const r2 = exec('pnpm ls -g @openchamber/web --depth=0 --json', { timeout: 30_000 })
+      after = JSON.parse(r2)?.[0]?.dependencies?.['@openchamber/web']?.version ?? null
+    } catch { /* */ }
+    emit({ tool: 'openchamber', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: r.err })
+  } finally {
+    try { startOpenchamber() } catch { /* */ }
+  }
+}
+
+// ─── Tool: pnpm (via volta) ────────────────────────────────────────────────
+async function auditPnpm(): Promise<void> {
+  let installed: string | null = null
+  try { installed = exec('pnpm --version', { timeout: 5_000 }) } catch { /* */ }
+  const r = await fetch('https://registry.npmjs.org/pnpm/latest', { signal: AbortSignal.timeout(15_000) })
+  const latest = r.ok ? ((await r.json() as { version?: string }).version ?? null) : null
+  if (!latest) { emit({ tool: 'pnpm', installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm fetch failed' }); return }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: 'pnpm', installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  const u = await timed(() => Promise.resolve().then(() => voltaInstall(`pnpm@${latest}`)))
+  let after: string | null = null
+  try { after = exec('pnpm --version', { timeout: 5_000 }) } catch { /* */ }
+  emit({ tool: 'pnpm', installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: node (via volta, same-major LTS pinning) ────────────────────────
+async function auditNode(): Promise<void> {
+  let installed: string | null = null
+  try { installed = exec('node --version', { timeout: 5_000 }) } catch { /* */ }
+  const { latestMinor, activeMajor } = await nodeLatestLtsInActiveMajor()
+  if (!installed || !activeMajor) {
+    emit({ tool: 'node', installed, latest: latestMinor, action: 'failed', old: null, new: null, duration_ms: 0, error: 'node or index.json unavailable' })
+    return
+  }
+  if (!latestMinor) {
+    emit({ tool: 'node', installed, latest: null, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // Same-major compare: if installed is already the latest minor in its major,
+  // no-op. Otherwise upgrade.
+  if (cmpVer(installed.replace(/^v/, ''), latestMinor.replace(/^v/, '')) >= 0) {
+    emit({ tool: 'node', installed, latest: latestMinor, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  const u = await timed(() => Promise.resolve().then(() => voltaInstall(`node@${latestMinor}`)))
+  let after: string | null = null
+  try { after = exec('node --version', { timeout: 5_000 }) } catch { /* */ }
+  emit({ tool: 'node', installed, latest: after ?? latestMinor, action: after && cmpVer(after.replace(/^v/, ''), installed.replace(/^v/, '')) > 0 ? 'upgraded' : 'failed', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: volta (self-update via curl installer) ──────────────────────────
+async function auditVolta(): Promise<void> {
+  let installed: string | null = null
+  try { installed = exec('volta --version', { timeout: 5_000 }) } catch { /* */ }
+  // No registry for volta — GitHub releases.
+  const { tag } = await ghLatest('volta-cli', 'volta')
+  if (!tag) { emit({ tool: 'volta', installed, latest: null, action: 'failed', old: null, new: null, duration_ms: 0, error: 'github fetch failed' }); return }
+  // tag looks like "v2.0.2"
+  if (!installed || cmpVer(installed, tag.replace(/^v/, '')) >= 0) {
+    emit({ tool: 'volta', installed, latest: tag, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // Self-update. The installer is non-interactive (it never asks). 5 minutes
+  // ceiling — the script re-downloads into ~/.volta.
+  const u = await timed(() => Promise.resolve().then(() => exec('curl -fsSL https://get.volta.sh | bash -s -- --skip-setup', { timeout: 240_000 })))
+  let after: string | null = null
+  try { after = exec('volta --version', { timeout: 5_000 }) } catch { /* */ }
+  emit({ tool: 'volta', installed, latest: after ?? tag, action: after && cmpVer(after, installed) > 0 ? 'upgraded' : 'failed', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: rtk (rtk-ai/rtk aarch64 tarball) ────────────────────────────────
+async function auditRtk(): Promise<void> {
+  const dest = join(HOME, '.local/bin/rtk')
+  let installed: string | null = null
+  if (existsSync(dest)) {
+    try { installed = exec('rtk --version', { timeout: 5_000 }).split('\n')[0]?.replace(/^rtk\s*/i, '').trim() ?? null } catch { /* */ }
+  }
+  const { tag } = await ghLatest('rtk-ai', 'rtk')
+  if (!tag) { emit({ tool: 'rtk', installed, latest: null, action: installed ? 'failed' : 'noop', old: null, new: null, duration_ms: 0, error: 'github fetch failed' }); return }
+  const tagV = tag.replace(/^v/, '')
+  // Three branches:
+  //   1. installed == null        → missing binary; (re)install latest
+  //   2. installed >= tagV        → up to date; noop
+  //   3. installed <  tagV        → upgrade available; install
+  if (installed && cmpVer(installed, tagV) >= 0) {
+    emit({ tool: 'rtk', installed, latest: tag, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  const u = await timed(() => ghBinaryUpgrade('rtk-ai', 'rtk', /^rtk-aarch64-unknown-linux-gnu\.tar\.gz$/, dest, /* isArchive */ true))
+  let after: string | null = null
+  try { after = exec('rtk --version', { timeout: 5_000 }).split('\n')[0]?.replace(/^rtk\s*/i, '').trim() ?? null } catch { /* */ }
+  emit({ tool: 'rtk', installed: installed ?? 'missing', latest: after ?? tag, action: u.err ? 'failed' : (installed === null ? 'upgraded' : 'upgraded'), old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: plannotator (backnotprop/plannotator linux-arm64 ELF) ──────────
+async function auditPlannotator(): Promise<void> {
+  const dest = join(HOME, '.local/bin/plannotator')
+  let installed: string | null = null
+  if (existsSync(dest)) {
+    try { installed = exec('plannotator --version', { timeout: 5_000 }).trim() ?? null } catch { /* */ }
+  }
+  const { tag } = await ghLatest('backnotprop', 'plannotator')
+  if (!tag) { emit({ tool: 'plannotator', installed, latest: null, action: installed ? 'failed' : 'noop', old: null, new: null, duration_ms: 0, error: 'github fetch failed' }); return }
+  const tagV = tag.replace(/^v/, '')
+  // (re)install when missing OR behind; same logic as rtk above.
+  if (installed && cmpVer(installed, tagV) >= 0) {
+    emit({ tool: 'plannotator', installed, latest: tag, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // linux-arm64 is the ELF for this aarch64 box.
+  const u = await timed(() => ghBinaryUpgrade('backnotprop', 'plannotator', /^plannotator-linux-arm64$/, dest, /* isArchive */ false))
+  let after: string | null = null
+  try { after = exec('plannotator --version', { timeout: 5_000 }).trim() ?? null } catch { /* */ }
+  emit({ tool: 'plannotator', installed: installed ?? 'missing', latest: after ?? tag, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: codegraph (its own `codegraph upgrade` subcommand) ──────────────
+async function auditCodegraph(): Promise<void> {
+  let installed: string | null = null
+  try { installed = exec('codegraph --version', { timeout: 5_000 }).trim() ?? null } catch { /* */ }
+  if (!installed) { emit({ tool: 'codegraph', installed, latest: null, action: 'noop', old: null, new: null, duration_ms: 0, error: null }); return }
+  // `codegraph upgrade --check` exits 0 in both "up to date" and "upgrade
+  // available" states (it prints a version diff to compare). We branch on
+  // the printed text instead of the exit code. Observed output:
+  //   on latest:       "You're on the latest version (vX.Y.Z)."
+  //                    OR  "CodeGraph  current vX current  latest vX.Y.Z"
+  //   upgrade avail:   "CodeGraph  current vX current  latest vY.Y.Z" (Y > X)
+  //                    OR  "CodeGraph vX.Y.Z → vY.Y.Z available"
+  // We trust the SECOND number (latest) when both are printed; if there is no
+  // upgrade, latest == installed and we short-circuit to noop.
+  let checkRaw = ''
+  try { checkRaw = exec('codegraph upgrade --check', { timeout: 30_000, env: { ...process.env, NO_COLOR: '1' } }) } catch (_) { /* fallthrough */ }
+  const m = checkRaw.match(/current\s+v?(\d[\d.]*)\s+latest\s+v?(\d[\d.]*)/i)
+  let codegraphLatest: string | null = m?.[2] ?? null
+  // If check output didn't yield a latest version, fall back to GitHub releases.
+  if (!codegraphLatest) {
+    const { tag } = await ghLatest('just-every', 'codegraph')
+    // We don't know the exact org/repo (probe earlier failed). Skip if unknown.
+    if (tag) codegraphLatest = tag.replace(/^v/, '')
+  }
+  if (!codegraphLatest || cmpVer(installed, codegraphLatest) >= 0) {
+    emit({ tool: 'codegraph', installed, latest: codegraphLatest ?? installed, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  // Default: an upgrade is available. Run it.
+  const u = await timed(() => Promise.resolve().then(() => exec('codegraph upgrade -f', { timeout: 240_000, env: { ...process.env, NO_COLOR: '1' } })))
+  let after: string | null = null
+  try { after = exec('codegraph --version', { timeout: 5_000 }).trim() ?? null } catch { /* */ }
+  emit({ tool: 'codegraph', installed, latest: after ?? codegraphLatest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Tool: opencode npm-plugin pool (6 packages) ──────────────────────────
+const OPENCODE_PLUGINS = [
+  'context-mode',
+  '@plannotator/opencode',
+  '@colbymchenry/codegraph',
+  'opencode-plugin-openspec',
+  '@fission-ai/openspec',
+] as const
+
+async function auditOpencodePlugin(name: string): Promise<void> {
+  // Installed version comes from the unified on-disk search across both
+  // volta image pools AND the opencode plugin cache. The cache pool is the
+  // runtime source of truth for opencode — but `npm install -g` writes
+  // through volta's path. We pick whichever is latest, so a freshly-upgraded
+  // volta-managed install doesn't look "missing" just because the opencode
+  // cache hasn't been refreshed.
+  const installedVolta = locateInstalledVersion(name)
+  const installed = installedVolta
+  const latest = await npmLatest(name)
+  if (!latest) { emit({ tool: name, installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' }); return }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: name, installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  const u = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade(name)))
+  // After install, refresh the cache pool AND volta. The volta path is what
+  // npm just touched, so it's our post-install truth source.
+  const after = locateInstalledVersion(name)
+  emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
+// ─── Main ──────────────────────────────────────────────────────────────────
+async function main() {
+  // Audit order: opencode-ai first (the load-bearing upgrade — restarts
+  // openchamber). Then openchamber itself. Then runtimes. Then plugins.
+  // Then companion binaries.
+  await auditOpencode()
+  await auditOpenchamber()
+  await auditPnpm()
+  await auditNode()
+  await auditVolta()
+  for (const p of OPENCODE_PLUGINS) await auditOpencodePlugin(p)
+  await auditRtk()
+  await auditPlannotator()
+  await auditCodegraph()
+}
+
+main().catch((e) => {
+  // The contract is: ALWAYS emit one JSON line per tool. A top-level throw
+  // means we missed emitting some lines. To preserve "one line per tool"
+  // semantics, emit a single catch-all marker so the cron agent knows.
+  emit({ tool: '__script__', installed: null, latest: null, action: 'failed', old: null, new: null, duration_ms: 0, error: e instanceof Error ? e.message : String(e) })
+  process.exit(1)
+})
