@@ -1,0 +1,20 @@
+[Unit]
+Description=Daily mercury host state backup schedule
+Documentation=file:///home/ubuntu/data/code/mercury-host/scripts/backup-mercury-state.sh
+Requires=mercury-state-backup.service
+
+[Timer]
+# Fire daily at 03:00 in America/Bogota (UTC-5, no DST).
+# OnCalendar timezone spec goes after the time, not as TZ= prefix.
+# This makes the trigger fire at 08:00 UTC every day (= 03:00 Bogota).
+OnCalendar=*-*-* 03:00:00 America/Bogota
+# If we missed a run (machine off, reclaimed for idleness, etc.),
+# catch up on next boot.
+Persistent=true
+# Small randomization so multiple timers on the host don't pile up.
+RandomizedDelaySec=60
+# Don't queue more than one run if the previous is still going.
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

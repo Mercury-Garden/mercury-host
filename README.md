@@ -8,6 +8,8 @@ The companion scripts — `scripts/capture.sh` and `scripts/audit.sh` — let yo
 
 For secrets, `scripts/backup-secrets.sh` snapshots every host secret to `~/.secrets/secrets.yaml` (mode 0600), and `scripts/restore-secrets.sh` is the inverse. The matching `secrets/secrets.yaml.template` is the sanitized version that's safe to commit.
 
+For full host state, `scripts/backup-mercury-state.sh` runs daily via systemd timer and produces a `zstd`-compressed tarball of every irreplaceable config dir on the host (see [State backup](#state-backup--oracle-cloud-block-volume)). Oracle Cloud also takes monthly snapshots of the data block volume `/dev/sdb` automatically — see [Oracle Cloud Block Volume backup](#oracle-cloud-block-volume-backup).
+
 ## Why this exists
 
 Two operational pressures:
@@ -45,7 +47,7 @@ secrets/                       # secrets/inventory.yaml — name → location �
 packages/                      # apt.list, snap.yaml, cargo.yaml, node.yaml
 network/                       # hostname, hosts, vcn notes
 projects/                      # tracked projects under ~/data/code/
-scripts/                       # capture.sh, audit.sh, restore.sh
+scripts/                       # capture.sh, audit.sh, restore.sh, backup-secrets.sh, restore-secrets.sh, backup-mercury-state.sh
 .github/workflows/             # CI gate (lint-yaml, shellcheck, secrets-scan)
 ```
 
@@ -67,6 +69,10 @@ bash scripts/backup-secrets.sh
 # Restore host secrets from a backup file
 bash scripts/restore-secrets.sh --dry-run             # preview
 bash scripts/restore-secrets.sh /path/to/secrets.yaml # apply
+
+# Snapshot full host state (irreplaceable configs) to a daily tarball
+bash scripts/backup-mercury-state.sh                  # one-off
+sudo systemctl status mercury-state-backup.timer     # daily at 03:00 America/Bogota
 ```
 
 ## Secrets backup & restore
@@ -104,6 +110,132 @@ The matching `secrets/secrets.yaml.template` is the sanitized version with every
 4. Restart services: `systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy webhook-server openchamber` and `sudo systemctl restart nginx`.
 
 **Rotation:** re-run `scripts/backup-secrets.sh --force` after rotating any secret. The real file is overwritten in place. The matching inventory entry in `secrets/inventory.yaml` should also be updated with the new rotation date.
+
+## State backup & Oracle Cloud Block Volume
+
+This host has two layers of backup:
+
+1. **Local tarball** (daily, 03:00 America/Bogota): `scripts/backup-mercury-state.sh` creates a `zstd -9` tarball of every irreplaceable config dir on the host and writes it to `/home/ubuntu/data/backups/mercury-state-<UTC>.tar.zst` with a sibling manifest JSON and verify JSON.
+2. **Oracle Cloud Block Volume snapshot** (monthly, automatic): Oracle's `oracle-cloud-agent` snap takes an incremental snapshot of `/dev/sdb` (the data block volume that holds the backups) on the 1st of each month, retained 90 days.
+
+Together they survive both host-loss (Oracle snapshot → new instance) and accidental-config-loss (yesterday's tarball).
+
+### What the local tarball captures
+
+Every path that is hard to recreate from scratch and easy to forget:
+
+- **AI/agent tools**: `~/.hermes`, `~/.config/{goose,opencode,discord-notify,oauth2-proxy,mercury-tasks,openchamber,webhook-server,gogcli}`, `~/.local/share/opencode`, `~/.claude/skills`
+- **Shell + editor**: `~/.zshrc`, `~/.bashrc`, `~/.gitconfig`, `~/.gitignore_global`, `~/.oh-my-zsh/custom`
+- **Code graph + plans**: `~/.plannotator`, `~/.codegraph`
+- **Security**: `~/.ssh`, `~/.gnupg` (config + public keys, no private key material — that goes in secrets)
+- **Repos**: `~/data/code/mercury-host` (this repo)
+- **Scripts**: `~/bin/`, `~/update.sh`, `~/certbot-dns-hook.sh`, `~/wildcard-cert-instructions.md`
+- **System config**: `/etc/systemd/system/`, `/etc/nginx/`, `/etc/letsencrypt/`
+
+**Excluded** (recreatable, too big, or not worth the noise): `node_modules`, `.pnpm-store`, `.git/objects`, Volta toolchains, model caches, audio cache, `~/.cache/go-build`.
+
+### Restore from the local tarball
+
+Tarballs live in `/home/ubuntu/data/backups/`. To find them:
+
+```bash
+ls -lh /home/ubuntu/data/backups/mercury-state-*.tar.zst
+```
+
+**Single file** (fastest, no full restore needed):
+
+```bash
+tar -I zstd -xf /home/ubuntu/data/backups/mercury-state-2026-06-30T19-50-28Z.tar.zst \
+  home/ubuntu/.zshrc \
+  -C /tmp/restore/
+sudo cp /tmp/restore/home/ubuntu/.zshrc /home/ubuntu/.zshrc
+```
+
+**Whole tarball** (review first with `--diff`):
+
+```bash
+sudo tar -I zstd -xf /home/ubuntu/data/backups/mercury-state-2026-06-30T19-50-28Z.tar.zst \
+  -C / --ignore-failed-read
+```
+
+Note: paths in the tarball are stored **without leading `/`** (so you can't accidentally clobber by extracting at the wrong cwd). After extraction, files in `/etc/*` will be owned by root regardless of which user extracted (because tar preserves ownership metadata).
+
+### Verify the latest tarball
+
+```bash
+# 1. Read the verify JSON (integrity check ran at backup time)
+cat /home/ubuntu/data/backups/mercury-state-*.verify.json | jq .
+
+# 2. Read the manifest (file list, sizes, mtimes)
+jq -r '.files[] | "\(.size)\t.path"' /home/ubuntu/data/backups/mercury-state-*.manifest.json
+
+# 3. Re-run the backup to refresh verification
+bash scripts/backup-mercury-state.sh
+```
+
+A green verify JSON means 5 random files were extracted and diff'd against the live source with byte-identical results.
+
+### Schedule, retention, logs
+
+- **Schedule**: `mercury-state-backup.timer` fires daily at 03:00 `America/Bogota` (= 08:00 UTC), `Persistent=true` so missed runs catch up after reboot.
+- **Retention**: `find -mtime +7` keeps the 7 most recent tarballs. At ~500 MB per day, that's ~3.5 GB on `/dev/sdb` (which has 45 GB free).
+- **Logs**: `/var/log/mercury-state-backup.log` (append, last 50 lines surfaced by `journalctl -u mercury-state-backup.service`).
+- **Capture**: `scripts/capture.sh` refreshes the `state_backup:` block in `inventory.yaml` with the latest tarball's timestamp, size, and compression ratio.
+- **Audit**: `scripts/audit.sh` warns if no fresh backup exists (default 36 h threshold).
+
+## Oracle Cloud Block Volume backup
+
+In addition to the local tarball, Oracle Cloud takes **monthly incremental snapshots** of the data block volume `/dev/sdb`. This is the volume that holds `/home/ubuntu/data` (projects, backups, codegraph data) — a separate physical disk from the boot volume.
+
+### What is backed up
+
+Everything on `/dev/sdb` — including the latest 7 days of `mercury-state-*.tar.zst`. So in a full host-loss scenario, restoring from the Block Volume snapshot gives you the tarball set used to recreate everything else.
+
+### Restore from a Block Volume snapshot
+
+The restore workflow is **detach → attach**:
+
+```bash
+# 1. From your laptop with OCI CLI configured, list backups:
+oci bv volume-backup list \
+  --volume-id ocid1.volume.oc1.us-chicago-1.abxxeljthy26gscgtw3evixaosbfvofmkh52y364u2kz5zmbvxyzvriobulq \
+  --region us-chicago-1
+
+# 2. Restore a backup into a new volume:
+oci bv volume create --availability-domain gKwy:US-CHICAGO-1-AD-1 \
+  --region us-chicago-1 \
+  --compartment-id ocid1.tenancy.oc1..aaaaaaaamwf47b2mqs2uqs3mina7kqvexqhxzzov6ocgmgbm5pxyi5mn65pq \
+  --source-volume-backup-id <backup-ocid>
+
+# 3. Attach to a fresh instance (or the rebuilt one):
+oci compute volume-attachment create \
+  --instance-id <instance-ocid> \
+  --volume-id <new-volume-ocid> \
+  --attachment-type paravirtualized
+```
+
+### What you still need to set up after a Block Volume restore
+
+The Block Volume snapshot is raw filesystem state — to make it a working host you also need:
+
+1. A fresh Ubuntu 24.04 instance (Oracle Always Free, same region/AD).
+2. SSH + secrets restored via `scripts/restore-secrets.sh` from a tarball inside the restored volume.
+3. `scripts/restore.sh` from this repo to lay down the systemd units + nginx vhosts + tool configs.
+4. The mercury-state tarball from inside the restored volume to recreate `~/*` (see above).
+
+### Free tier note
+
+Oracle Always Free includes **5 Block Volume backups total** (boot volume + data volume combined). The monthly policy on `/dev/sdb` retains 90 days = up to 3 backups. The boot volume is **not** snapshotted — it changes rarely and re-imaging Ubuntu is fast; one less slot burned.
+
+### Disaster recovery summary
+
+| Failure | Recovery |
+|---|---|
+| Lost a config file | `tar -I zstd -xf /home/ubuntu/data/backups/mercury-state-*.tar.zst home/ubuntu/path/to/file` |
+| Lost `/dev/sdb` (data disk) | Restore last Block Volume snapshot → new volume → reattach |
+| Lost `/dev/sda` (boot disk) | Reimage Ubuntu + restore-secrets + restore.sh + restore tarball from `/dev/sdb` |
+| Lost the host entirely | Same as boot disk — Block Volume persists independently |
+| Region-wide outage | Out of scope for Always Free; backups would need cross-region replication |
 
 ## Conventions
 

@@ -294,6 +294,105 @@ CRON_DRIFT=$(echo "$CRON_OUT" | grep '__CRON_DRIFT__:' | tail -1 | sed 's/.*://'
 CRON_DRIFT=${CRON_DRIFT:-0}
 DRIFT=$((DRIFT + CRON_DRIFT))
 
+# ── 10. State backup (local tarball of host config + data) ─────────────
+echo
+echo "[state_backup]"
+SB_OUT=$(python3 - "$INV" 2>&1 <<'PYEOF'
+import datetime, json, pathlib, re, sys
+
+inv_path = pathlib.Path(sys.argv[1])
+text = inv_path.read_text()
+backup_root = pathlib.Path('/home/ubuntu/data/backups')
+
+# Parse state_backup: section from inventory
+sb = re.search(r'^state_backup:\n((?:  [^\n]*\n)+)', text, re.MULTILINE)
+if not sb:
+    print("  ! state_backup: section not found in inventory, skipping")
+    print("__SB_DRIFT__:0")
+    sys.exit(0)
+
+def get_value(block, key):
+    m = re.search(rf'^  {re.escape(key)}:\s*(.*)$', block, re.MULTILINE)
+    if not m:
+        return None
+    v = m.group(1).strip()
+    # Strip inline comments (# preceded by whitespace or end of value)
+    v = re.split(r'\s+#', v, maxsplit=1)[0].strip()
+    if v in ('null', '~', ''):
+        return None
+    if v.startswith('"') and v.endswith('"'):
+        return v[1:-1]
+    return v
+
+block = sb.group(1)
+last_run = get_value(block, 'last_run_at')
+expected_path = get_value(block, 'location')
+max_age_hours = float(get_value(block, 'max_age_hours') or 36)
+
+drift = 0
+
+# 1. Tarballs exist
+tarballs = sorted(backup_root.glob('mercury-state-*.tar.zst'))
+if not tarballs:
+    print(f"  ✗ DRIFT: no tarballs in {backup_root}")
+    drift += 1
+else:
+    print(f"  ✓ tarballs: {len(tarballs)} in {backup_root}")
+
+# 2. Latest backup is fresh
+if last_run and last_run != 'null':
+    try:
+        # Backup timestamps use dashes in HH-MM-SS (filename-safe).
+        # Replace dashes in the time portion with colons so Python's fromisoformat accepts them.
+        norm = re.sub(r'(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})', r'\1T\2:\3:\4', last_run)
+        norm = norm.replace('Z', '+00:00')
+        last_dt = datetime.datetime.fromisoformat(norm)
+        age = datetime.datetime.now(datetime.timezone.utc) - last_dt
+        age_hours = age.total_seconds() / 3600
+        if age_hours > max_age_hours:
+            print(f"  ✗ DRIFT: last backup is {age_hours:.1f}h old (max {max_age_hours}h)")
+            drift += 1
+        else:
+            print(f"  ✓ freshness: last backup {age_hours:.1f}h ago (max {max_age_hours}h)")
+    except (ValueError, AttributeError) as e:
+        print(f"  ! could not parse last_run_at '{last_run}': {e}")
+else:
+    print(f"  ! last_run_at not set — running capture.sh will populate it")
+
+# 3. Systemd timer is enabled + scheduled
+import subprocess
+try:
+    out = subprocess.check_output(
+        ['systemctl', 'show', 'mercury-state-backup.timer',
+         '--property=ActiveState,UnitFileState,NextElapseUSecRealtime'],
+        text=True, stderr=subprocess.DEVNULL
+    )
+    state = {}
+    for line in out.splitlines():
+        if '=' in line:
+            k, _, v = line.partition('=')
+            state[k] = v
+    if state.get('UnitFileState') != 'enabled':
+        print(f"  ✗ DRIFT: mercury-state-backup.timer is {state.get('UnitFileState')}, expected enabled")
+        drift += 1
+    else:
+        print(f"  ✓ timer: enabled, next run {state.get('NextElapseUSecRealtime', 'unknown')}")
+except (subprocess.CalledProcessError, FileNotFoundError) as e:
+    print(f"  ! systemd check failed: {e}")
+
+# 4. OCI Block Volume backup (the outer DR layer) — check last backup age
+# This requires oci CLI on the host, which we don't have. Skip but log.
+# (User runs OCI CLI commands from their laptop; the volume backup
+# is configured via Oracle Console, not the host.)
+
+print(f"__SB_DRIFT__:{drift}")
+PYEOF
+)
+echo "$SB_OUT" | grep -v '__SB_DRIFT__:' || true
+SB_DRIFT=$(echo "$SB_OUT" | grep '__SB_DRIFT__:' | tail -1 | sed 's/.*://')
+SB_DRIFT=${SB_DRIFT:-0}
+DRIFT=$((DRIFT + SB_DRIFT))
+
 # ── summary ──────────────────────────────────────────────────────────────
 echo
 if [ "$DRIFT" -eq 0 ]; then
