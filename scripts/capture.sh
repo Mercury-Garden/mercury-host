@@ -411,6 +411,118 @@ node_path.write_text(text.rstrip('\n') + '\n')
 print("  refreshed packages/node.yaml")
 PYEOF
 
+# ── cron: refresh hermes jobs + system cron.d list ───────────────────────
+echo
+echo "[cron]"
+python3 - <<'PYEOF'
+import json, os, pathlib, re
+
+inv_path = pathlib.Path('inventory.yaml')
+text = inv_path.read_text()
+home = pathlib.Path.home()
+
+# ── 1. system_cron_d: list of /etc/cron.d/<name> files present ──────
+cron_d = pathlib.Path('/etc/cron.d')
+real_system_cron = []
+if cron_d.is_dir():
+    for entry in sorted(cron_d.iterdir()):
+        # Skip the .placeholder file Ubuntu ships
+        if entry.name.startswith('.'):
+            continue
+        real_system_cron.append(f"/etc/cron.d/{entry.name}")
+print(f"  system_cron_d: {len(real_system_cron)} entries: {[p.rsplit('/', 1)[-1] for p in real_system_cron]}")
+
+# Replace the system_cron_d: block. The block has the form:
+#   system_cron_d:
+#     # comment
+#     - item1
+#     - item2
+# We match the key line, optional indented comments, then the list items.
+def replace_list_block(text, key, items, list_indent='  ', key_indent=''):
+    """Replace the YAML list under `key:` with the given items.
+
+    Tolerates indented comment lines between the key and the list items.
+    """
+    pat = re.compile(
+        rf'^{re.escape(key_indent)}{re.escape(key)}:\n'
+        rf'((?:{re.escape(list_indent)}[^\n]*\n)*)',
+        re.MULTILINE,
+    )
+    m = pat.search(text)
+    if not m:
+        print(f"  {key}: not found in inventory, skipping")
+        return text
+    new_block = f"{key_indent}{key}:\n"
+    for it in items:
+        new_block += f"{list_indent}- {it}\n"
+    return text[:m.start()] + new_block + text[m.end():]
+
+text = replace_list_block(text, 'system_cron_d', real_system_cron, list_indent='    ', key_indent='  ')
+
+# ── 2. hermes.jobs: parse ~/.hermes/cron/jobs.json ──────────────────
+jobs_file = home / '.hermes' / 'cron' / 'jobs.json'
+hermes_jobs = []
+if jobs_file.exists():
+    try:
+        jd = json.loads(jobs_file.read_text())
+        for j in jd.get('jobs', []):
+            sched = j.get('schedule', {})
+            display = sched.get('display', '?')
+            hermes_jobs.append({'id': j.get('id', ''), 'schedule': display, 'name': j.get('name', '')})
+    except json.JSONDecodeError as e:
+        print(f"  hermes.jobs: JSON parse error: {e}")
+print(f"  hermes.jobs: {len(hermes_jobs)} jobs")
+
+# Replace the hermes.jobs: empty list with a populated block.
+# Match exactly the line `    jobs: []` (with optional trailing whitespace + comment).
+hermes_block_re = re.compile(
+    r'^(    jobs: )\[\][ \t]*(#[^\n]*)?\n',
+    re.MULTILINE,
+)
+def fill_hermes_jobs(m):
+    if not hermes_jobs:
+        return m.group(0)  # keep `jobs: []` if no jobs
+    # m.group(1) is `    jobs: ` (with trailing space). Strip it.
+    key_part = m.group(1).rstrip()
+    new = key_part + ':\n'
+    for j in hermes_jobs:
+        new += f"      - id: {j['id']}\n"
+        new += f"        name: {j['name']}\n"
+        new += f"        schedule: \"{j['schedule']}\"\n"
+    return new
+
+text = hermes_block_re.sub(fill_hermes_jobs, text, count=1)
+
+# ── 3. user_crontab: parse `crontab -l` ──────────────────────────────
+import subprocess
+user_crontab = None
+try:
+    out = subprocess.check_output(['crontab', '-l'], stderr=subprocess.DEVNULL, text=True).strip()
+    user_crontab = out if out else None
+except subprocess.CalledProcessError:
+    # Exit 1 from crontab = no crontab
+    user_crontab = None
+print(f"  user_crontab: {'set' if user_crontab else 'empty'}")
+
+# Replace the user_crontab: null line
+if user_crontab:
+    # We DO NOT write the contents (security + gitignore) — just mark non-null.
+    text = re.sub(
+        r'^([ \t]+user_crontab: ).+$',
+        r'\1"present (not tracked — see /var/spool/cron/crontabs/$USER)"',
+        text, count=1, flags=re.MULTILINE,
+    )
+else:
+    text = re.sub(
+        r'^([ \t]+user_crontab: ).+$',
+        r'\1null',
+        text, count=1, flags=re.MULTILINE,
+    )
+
+inv_path.write_text(text.rstrip('\n') + '\n')
+print("  refreshed cron: block in inventory.yaml")
+PYEOF
+
 # ── network/: refresh hostname + hosts ────────────────────────────────────
 echo
 echo "[network]"

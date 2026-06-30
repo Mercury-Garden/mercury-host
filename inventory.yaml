@@ -111,6 +111,30 @@ services:
     unit: /lib/systemd/system/cron.service     # Ubuntu package, do not own
     description: "OS-level cron (only system tasks; user crontab is empty)"
 
+cron:
+  system_cron_d:
+    - /etc/cron.d/certbot
+    - /etc/cron.d/e2scrub_all
+    - /etc/cron.d/sysstat
+  user_crontab: null
+  hermes:
+    jobs_file: ~/.hermes/cron/jobs.json
+    jobs::
+      - id: 59b7302d21b7
+        name: x-digest-daily
+        schedule: "0 14 * * 1-5"
+      - id: e7239d6f904e
+        name: auto-arc-advance
+        schedule: "every 1m"
+      - id: b5586aeda0f3
+        name: better-bet-knockout-daily-update
+        schedule: "30 12 * * *"
+  system_timers:
+    - certbot.timer
+    - apt-daily.timer
+    - apt-daily-upgrade.timer
+    - fwupd-refresh.timer
+
 node_managers:
   volta:
     install_method: https://volta.sh
@@ -145,14 +169,14 @@ projects:
     expected_branch: fix/pollapp-api-contract-drift   # local working branch
     lockfile_sha256: 94c13fb9894a    # capture.sh: refreshed better-bet
     owns_subdomain: null
-    volta_pinned: false
+    volta_pinned: true
 
   - path: ~/data/code/scriptcaster
     repo: Mercury-Garden/scriptcaster
     package_manager: pnpm@11.9.0
     pinned_node: 24.18.0
     expected_branch: main
-    lockfile_sha256: 542a3b6a36cf    # capture.sh: refreshed scriptcaster
+    lockfile_sha256: 8e70e503f2eb    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
     volta_pinned: true
 
