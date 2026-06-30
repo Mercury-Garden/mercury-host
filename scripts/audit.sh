@@ -225,6 +225,75 @@ else
   drift "PATH starts with '$FIRST' (expected '$EXPECTED_FIRST')"
 fi
 
+# ── 9. Cron (system cron.d + hermes jobs) ────────────────────────────────
+echo
+echo "[cron]"
+# Run python: capture stdout (the human-readable ✓/✗ lines) AND stderr (drift count).
+CRON_OUT=$(python3 - "$INV" 2>&1 <<'PYEOF'
+import json, pathlib, subprocess, sys
+inv_path = pathlib.Path(sys.argv[1])
+text = inv_path.read_text()
+home = pathlib.Path.home()
+
+# system_cron_d: extract from YAML. Tolerate comments between key + list.
+import re
+scd = re.search(r'^  system_cron_d:\n((?:    [^\n]*\n)*)', text, re.MULTILINE)
+expected = set()
+if scd:
+    for line in scd.group(1).splitlines():
+        m = re.match(r'^    - (\S+)\s*$', line)
+        if m:
+            expected.add(m.group(1))
+
+# Actual
+cron_d = pathlib.Path('/etc/cron.d')
+actual = set()
+if cron_d.is_dir():
+    for entry in cron_d.iterdir():
+        if entry.name.startswith('.'):
+            continue
+        actual.add(f"/etc/cron.d/{entry.name}")
+
+# Compare
+missing = expected - actual
+extra = actual - expected
+if not missing and not extra:
+    print(f"  ✓ system_cron_d: {len(actual)} entries match inventory")
+else:
+    for p in sorted(missing):
+        print(f"  ✗ DRIFT: {p} in inventory but missing on host")
+    for p in sorted(extra):
+        print(f"  ✗ DRIFT: {p} on host but not in inventory")
+
+# Hermes jobs: parse jobs.json, count
+jobs_file = home / '.hermes' / 'cron' / 'jobs.json'
+drift = len(missing) + len(extra)
+if jobs_file.exists():
+    try:
+        jd = json.loads(jobs_file.read_text())
+        live = len(jd.get('jobs', []))
+        declared = len(re.findall(r'^      - id: ', text, re.MULTILINE))
+        if live == declared:
+            print(f"  ✓ hermes.jobs: {live} jobs match inventory")
+        else:
+            print(f"  ✗ DRIFT: hermes.jobs live={live} inventory={declared}")
+            drift += 1
+    except json.JSONDecodeError as e:
+        print(f"  ✗ hermes.jobs: jobs.json parse error: {e}")
+        drift += 1
+else:
+    print(f"  ! {jobs_file} not present, skipping hermes.jobs check")
+
+# Emit the drift count on its own line so the parent shell can grep it.
+print(f"__CRON_DRIFT__:{drift}")
+PYEOF
+)
+# Echo the human-readable portion, then extract the drift count.
+echo "$CRON_OUT" | grep -v '__CRON_DRIFT__:' || true
+CRON_DRIFT=$(echo "$CRON_OUT" | grep '__CRON_DRIFT__:' | tail -1 | sed 's/.*://')
+CRON_DRIFT=${CRON_DRIFT:-0}
+DRIFT=$((DRIFT + CRON_DRIFT))
+
 # ── summary ──────────────────────────────────────────────────────────────
 echo
 if [ "$DRIFT" -eq 0 ]; then
