@@ -523,6 +523,74 @@ inv_path.write_text(text.rstrip('\n') + '\n')
 print("  refreshed cron: block in inventory.yaml")
 PYEOF
 
+# ── state_backup: refresh mercury-state backup metadata ───────────────
+echo
+echo "[state_backup]"
+python3 - <<'PYEOF'
+import json, pathlib, re
+
+inv_path = pathlib.Path('inventory.yaml')
+text = inv_path.read_text()
+backup_root = pathlib.Path('/home/ubuntu/data/backups')
+
+# Read latest manifest
+manifest = None
+manifests = sorted(backup_root.glob('mercury-state-*.manifest.json'), reverse=True)
+if manifests:
+    latest = manifests[0]
+    try:
+        manifest = json.loads(latest.read_text())
+        print(f"  latest: {latest.name}")
+    except json.JSONDecodeError as e:
+        print(f"  WARN: {latest.name} unparseable: {e}")
+
+# Read latest verify
+verify = None
+verifies = sorted(backup_root.glob('mercury-state-*.verify.json'), reverse=True)
+if verifies:
+    latest_v = verifies[0]
+    try:
+        verify = json.loads(latest_v.read_text())
+    except json.JSONDecodeError:
+        pass
+
+# Count existing tarballs
+tarballs = sorted(backup_root.glob('mercury-state-*.tar.zst'))
+print(f"  tarballs on disk: {len(tarballs)} (oldest: {tarballs[0].name if tarballs else 'none'}, newest: {tarballs[-1].name if tarballs else 'none'})")
+
+# Replace the state_backup: block values
+def replace_yaml_value(text, key, value):
+    """Replace `key: <anything>` with `key: <value>` (preserves indent)."""
+    if value is None:
+        new_v = 'null'
+    elif isinstance(value, bool):
+        new_v = 'true' if value else 'false'
+    elif isinstance(value, (int, float)):
+        new_v = str(value)
+    else:
+        new_v = f'"{value}"'
+    pat = re.compile(rf'^(\s+{re.escape(key)}:\s*)(.+)$', re.MULTILINE)
+    if not pat.search(text):
+        print(f"  {key}: not found in inventory, skipping")
+        return text
+    return pat.sub(rf'\g<1>{new_v}', text, count=1)
+
+if manifest:
+    text = replace_yaml_value(text, 'last_run_at', manifest.get('started_at_utc'))
+    text = replace_yaml_value(text, 'last_size_mb', manifest.get('archive', {}).get('size_mb'))
+    text = replace_yaml_value(text, 'last_file_count', manifest.get('contents', {}).get('file_count'))
+    text = replace_yaml_value(text, 'last_sha256', manifest.get('archive', {}).get('sha256'))
+if verify:
+    samples_ok = verify.get('samples_ok')
+    samples_total = verify.get('samples_total')
+    text = replace_yaml_value(text, 'last_verify_ok', f"{samples_ok}/{samples_total}")
+    text = replace_yaml_value(text, 'last_verify_at', verify.get('checked_at_utc'))
+text = replace_yaml_value(text, 'tarballs_on_disk', len(tarballs))
+
+inv_path.write_text(text.rstrip('\n') + '\n')
+print("  refreshed state_backup: block in inventory.yaml")
+PYEOF
+
 # ── network/: refresh hostname + hosts ────────────────────────────────────
 echo
 echo "[network]"

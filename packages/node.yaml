@@ -13,25 +13,10 @@ node_managers:
     default_npm: 11.17.0
     default_pnpm: 11.9.0
     cached_runtimes:
-      - 24.14.1   # stale; kept because volta doesn't auto-prune
-      - 24.16.0   # kept for openspec / plannotator / context-mode pins
-      - 24.18.0   # default
+      - 24.14.1   # stale; not in current volta cache
+      - 24.16.0   # stale; not in current volta cache
+      - 24.18.0   # stale; not in current volta cache
     globally_pinned_packages:
-      - name: "@fission-ai/openspec"
-        version: 1.4.1
-        node: 24.16.0
-      - name: "@plannotator/opencode"
-        version: 0.20.1
-        node: 24.16.0
-      - name: context-mode
-        version: 1.0.162
-        node: 24.16.0
-      - name: opencode-ai
-        version: 1.17.11
-        node: 24.18.0
-      - name: pnpm
-        version: 11.9.0
-        node: 24.18.0
 
   hermes_bundled:
     home: ~/.hermes/node

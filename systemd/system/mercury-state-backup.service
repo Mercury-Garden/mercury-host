@@ -1,0 +1,18 @@
+[Unit]
+Description=Backup mercury host state (config + data) to /home/ubuntu/data/backups/
+Documentation=file:///home/ubuntu/data/code/mercury-host/scripts/backup-mercury-state.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/data/code/mercury-host/scripts/backup-mercury-state.sh
+WorkingDirectory=/home/ubuntu
+# Generous timeout — first backup with full state may take 1-3 min; integrity
+# check adds another ~30s. 15min ceiling covers pathological cases.
+TimeoutStartSec=900
+# Surface exit code + last lines via journalctl
+StandardOutput=journal
+StandardError=journal
+# Don't restart — backup is one-shot, retry would corrupt the manifest.
+SuccessExitStatus=0
