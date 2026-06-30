@@ -31,3 +31,23 @@ users:
     shell: /usr/bin/zsh
     sudo: true
     owns: "all services in systemd/user/, all tooling/, all projects/"
+
+oracle_cloud:
+  # The full canonical identifiers live in inventory.yaml → state_backup.oci_block_volume.
+  # This is a pointer for ops who land on host.yaml first.
+  region: us-chicago-1
+  availability_domain: gKwy:US-CHICAGO-1-AD-1
+  instance_shape: VM.Standard.A1.Flex    # Always Free ARM (4 OCPU, 24 GB)
+  block_volumes:
+    - name: boot
+      device: /dev/sda
+      size_gb: 47
+      snapshots: false                     # intentionally not backed up; see inventory.yaml
+    - name: data
+      device: /dev/sdb
+      mount: /home/ubuntu/data
+      size_gb: 50
+      snapshots: monthly, retained 90 days
+  free_tier:
+    arm_instances: 1 of 4 used
+    block_volume_backups: 1 of 5 used
