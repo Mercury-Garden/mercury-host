@@ -18,6 +18,10 @@
 #   mercury-tasks   /home/ubuntu/.config/mercury-tasks/tokens.json
 #   x-digest     ~/data/code/x-digest/.env
 #   openchamber  /home/ubuntu/.config/openchamber/startup.env
+#   opencode    ~/.local/share/opencode/auth.json
+#   discord-notify  ~/.config/discord-notify/config.yaml
+#   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
+#   webhook-server  ~/.config/webhook-server/secret.txt + projects.yaml
 #
 # This script is the inverse of backup-secrets.sh. It writes files with
 # the same modes the originals had on the source host (0600 for secrets,
@@ -124,6 +128,57 @@ print(f"  ✓ wrote {dest} ({len(decoded)} bytes, mode {oct(mode)})", file=sys.s
 PYEOF
 }
 
+# Decode a b64 block, gunzip, untar into a target directory.
+# Used for the gogcli keyring (3 encrypted blobs packed as tar.gz).
+#
+# Usage: extract_tar_gz_b64_block "key" "/target/dir"   →  untars into dir
+# Returns 0 on success, 1 if the block is null or extraction fails.
+extract_tar_gz_b64_block() {
+  local key="$1" target_dir="$2"
+  python3 - "$SRC" "$key" "$target_dir" <<'PYEOF'
+import base64, gzip, io, os, pathlib, shutil, sys, tarfile
+src, key, target_dir = sys.argv[1:4]
+text = pathlib.Path(src).read_text()
+lines = text.splitlines()
+out, in_block = [], False
+for line in lines:
+    if not in_block:
+        if line.startswith(key + ':') and (line[len(key)+1:].strip() in ('|', '|-', '>')):
+            in_block = True
+        continue
+    if not line:
+        out.append('')
+    elif line.startswith(' ') or line.startswith('\t'):
+        out.append(line)
+    else:
+        break
+non_blank = [l for l in out if l]
+if not non_blank:
+    print(f"  ! {key}: not found or null in {src}", file=sys.stderr)
+    sys.exit(1)
+min_indent = min(len(l) - len(l.lstrip()) for l in non_blank)
+stripped = ''.join(l[min_indent:] for l in out if l)
+try:
+    decoded = base64.b64decode(stripped, validate=True)
+except Exception as e:
+    print(f"  ! b64 decode failed for {key}: {e}", file=sys.stderr)
+    sys.exit(1)
+# Gunzip + untar. Replace the target dir contents to keep the restore idempotent.
+if os.path.isdir(target_dir):
+    shutil.rmtree(target_dir)
+os.makedirs(target_dir, exist_ok=True)
+tar_bytes = gzip.decompress(decoded)
+tar = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r')
+tar.extractall(path=os.path.dirname(target_dir))
+# Restore perms on extracted files (tar preserves them but be defensive)
+for root, _, files in os.walk(target_dir):
+    for f in files:
+        p = os.path.join(root, f)
+        os.chmod(p, 0o600)
+print(f"  ✓ extracted {target_dir} (from {len(decoded)}-byte b64 block)", file=sys.stderr)
+PYEOF
+}
+
 # Decode a scalar string field, write to DEST (or echo if dest is "-").
 decode_scalar() {
   local key="$1" dest="$2"
@@ -188,6 +243,20 @@ if [ $DRY_RUN -eq 1 ]; then
   fi
   if in_include openchamber; then
     echo "  openchamber: /home/ubuntu/.config/openchamber/startup.env  (mode 0600)"
+  fi
+  if in_include opencode; then
+    echo "  opencode:   ~/.local/share/opencode/auth.json  (mode 0600)"
+  fi
+  if in_include discord-notify; then
+    echo "  discord-notify: ~/.config/discord-notify/config.yaml  (mode 0600)"
+  fi
+  if in_include gogcli; then
+    echo "  gogcli:     ~/.config/gogcli/credentials.json  (mode 0600)"
+    echo "              ~/.config/gogcli/keyring/          (3 encrypted blobs, tar.gz)"
+  fi
+  if in_include webhook-server; then
+    echo "  webhook-server: ~/.config/webhook-server/secret.txt  (mode 0600)"
+    echo "                  ~/.config/webhook-server/projects.yaml  (mode 0600)"
   fi
   echo
   exit 0
@@ -383,6 +452,66 @@ if in_include openchamber; then
     ok "openchamber_startup_env"
   else
     warn "openchamber_startup_env: SKIPPED (null in source)"
+  fi
+fi
+
+# ── opencode auth ───────────────────────────────────────────────────────
+if in_include opencode; then
+  note "restoring opencode auth..."
+  OC_DIR="${HOME}/.local/share/opencode"
+  mkdir -p "$OC_DIR"
+  if decode_b64_block "opencode_auth" "$OC_DIR/auth.json" 0600; then
+    ok "opencode_auth"
+  else
+    warn "opencode_auth: SKIPPED (null in source)"
+  fi
+fi
+
+# ── discord-notify ──────────────────────────────────────────────────────
+if in_include discord-notify; then
+  note "restoring discord-notify config..."
+  DN_DIR="${HOME}/.config/discord-notify"
+  mkdir -p "$DN_DIR"
+  if decode_b64_block "discord_notify_config" "$DN_DIR/config.yaml" 0600; then
+    ok "discord_notify_config"
+  else
+    warn "discord_notify_config: SKIPPED (null in source)"
+  fi
+fi
+
+# ── gogcli (credentials + encrypted keyring) ────────────────────────────
+# Restoring the keyring requires GOG_KEYRING_PASSWORD (in hermes .env) to
+# decrypt the 3 blobs. The password itself is in the hermes block above.
+if in_include gogcli; then
+  note "restoring gogcli credentials + keyring..."
+  GOG_DIR="${HOME}/.config/gogcli"
+  mkdir -p "$GOG_DIR"
+  if decode_b64_block "gogcli_credentials" "$GOG_DIR/credentials.json" 0600; then
+    ok "gogcli_credentials"
+  else
+    warn "gogcli_credentials: SKIPPED (null in source)"
+  fi
+  if extract_tar_gz_b64_block "gogcli_keyring_tar_gz" "$GOG_DIR/keyring" 2>/dev/null; then
+    ok "gogcli_keyring"
+  else
+    warn "gogcli_keyring: SKIPPED (null in source or extraction failed)"
+  fi
+fi
+
+# ── webhook-server ──────────────────────────────────────────────────────
+if in_include webhook-server; then
+  note "restoring webhook-server config..."
+  WS_DIR="${HOME}/.config/webhook-server"
+  mkdir -p "$WS_DIR"
+  if decode_b64_block "webhook_server_secret" "$WS_DIR/secret.txt" 0600; then
+    ok "webhook_server_secret"
+  else
+    warn "webhook_server_secret: SKIPPED (null in source)"
+  fi
+  if decode_b64_block "webhook_server_projects" "$WS_DIR/projects.yaml" 0600; then
+    ok "webhook_server_projects"
+  else
+    warn "webhook_server_projects: SKIPPED (null in source)"
   fi
 fi
 

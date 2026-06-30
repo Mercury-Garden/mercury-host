@@ -81,7 +81,7 @@ The matching `secrets/secrets.yaml.template` is the sanitized version with every
 |---|---|
 | `ssh_ed25519_private`, `ssh_ed25519_public` | `~/.ssh/id_ed25519{,pub}` |
 | `gh_hosts_yml` | `~/.config/gh/hosts.yml` |
-| `gh_token_env` | `~/.hermes/.env` `GITHUB_TOKEN=` line |
+| `gh_token_env` | `~/.hermes/.env` GITHUB_TOKEN value |
 | `oauth2_client_secret`, `oauth2_cookie_secret` | `~/.config/oauth2-proxy/oauth2-proxy.cfg` |
 | `hermes_env` | `~/.hermes/.env` (full file) |
 | `goose_secrets` | `~/.config/goose/secrets.yaml` |
@@ -89,8 +89,12 @@ The matching `secrets/secrets.yaml.template` is the sanitized version with every
 | `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` |
 | `x_digest_env` | `~/data/code/x-digest/.env` |
 | `openchamber_startup_env` | `/home/ubuntu/.config/openchamber/startup.env` |
+| `opencode_auth` | `~/.local/share/opencode/auth.json` (3 provider API keys) |
+| `discord_notify_config` | `~/.config/discord-notify/config.yaml` (4 per-project HMAC + chat IDs) |
+| `gogcli_credentials`, `gogcli_keyring_tar_gz` | `~/.config/gogcli/credentials.json` + `keyring/` packed as tar.gz |
+| `webhook_server_secret`, `webhook_server_projects` | `~/.config/webhook-server/secret.txt` + `projects.yaml` |
 
-`scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,openchamber`), and `--dry-run` to preview without writing. The script round-trips byte-identical for every file type (verified locally before commit).
+`scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,openchamber,opencode,discord-notify,gogcli,webhook-server`), and `--dry-run` to preview without writing. The script round-trips byte-identical for every file type (verified locally before commit).
 
 **Bootstrap a fresh host:**
 

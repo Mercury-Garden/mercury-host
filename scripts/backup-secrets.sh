@@ -19,6 +19,18 @@
 #   mercury-tasks-tokens          /home/ubuntu/.config/mercury-tasks/tokens.json
 #   x-digest-env                  ~/data/code/x-digest/.env
 #   openchamber-startup-env       /home/ubuntu/.config/openchamber/startup.env
+#   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
+#   discord-notify                ~/.config/discord-notify/config.yaml  (added 2026-06-30)
+#   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
+#   webhook-server                ~/.config/webhook-server/secret.txt + projects.yaml  (added 2026-06-30)
+#
+# Skipped on purpose:
+#   ~/.hermes/auth.json           — only contains secret_fingerprints (sha256 of
+#                                   the real keys, which live in ~/.hermes/.env).
+#                                   Capturing it would bloat the file with no
+#                                   new information.
+#   ~/.hermes/state-snapshots/    — auto-managed; only valid one is the latest
+#                                   auth.json above (skipped).
 #
 # Usage:
 #   bash scripts/backup-secrets.sh          # writes ~/.secrets/secrets.yaml
@@ -121,6 +133,26 @@ emit_b64_block() {
   fi
 }
 
+# ── pack a directory of files into a single tar.gz, then base64 it as a
+# YAML literal block. Used for the gogcli keyring/ which has 3 binary
+# encrypted blobs that need to stay together to be useful.
+#
+# Usage: pack_dir_b64_block "key" "/path/to/dir"   →  prints "key: |\n      <b64>"
+# If dir is missing, prints "key: null" and returns 1.
+pack_dir_b64_block() {
+  local key="$1" dir="$2"
+  if [ -d "$dir" ]; then
+    printf '%s: |\n' "$key"
+    tar -C "$(dirname "$dir")" -czf - "$(basename "$dir")" \
+      | base64 -w 76 \
+      | awk '{printf "      %s\n", $0}'
+    return 0
+  else
+    printf '%s: null\n' "$key"
+    return 1
+  fi
+}
+
 # ── emit a scalar string value, with proper YAML quoting
 emit_scalar() {
   local value="$1"
@@ -147,10 +179,19 @@ OAUTH2_CLIENT_SECRET="$(read_oauth2_key "$OAUTH2_CFG" client_secret || true)"
 OAUTH2_COOKIE_SECRET="$(read_oauth2_key "$OAUTH2_CFG" cookie_secret || true)"
 MT_TOKENS="/home/ubuntu/.config/mercury-tasks/tokens.json"
 XD_ENV="${HOME}/data/code/x-digest/.env"
-OC_ENV="/home/ubuntu/.config/openchamber/startup.env"
+OC_ENV="${HOME}/.config/openchamber/startup.env"
 ACCT_KEY="$(find /etc/letsencrypt/accounts -name account_key.json 2>/dev/null | head -1 || true)"
 PRIVKEY_LINK="/etc/letsencrypt/live/mercury.garden/privkey.pem"
 PRIVKEY_REAL="$(readlink -f "$PRIVKEY_LINK" 2>/dev/null || echo "$PRIVKEY_LINK")"
+
+# ── NEW kinds (added 2026-06-30 after opencode auth.json was identified as
+#    missing from the original 12-source list). Each one is a host-restorable
+#    secret needed to fully recreate the operational state.
+OPENCODE_AUTH="${HOME}/.local/share/opencode/auth.json"
+DISCORD_NOTIFY_CFG="${HOME}/.config/discord-notify/config.yaml"
+GOGCLI_CREDENTIALS="${HOME}/.config/gogcli/credentials.json"
+GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
+WEBHOOK_SERVER_DIR="${HOME}/.config/webhook-server"
 
 # Build the YAML
 {
@@ -216,6 +257,22 @@ PRIVKEY_REAL="$(readlink -f "$PRIVKEY_LINK" 2>/dev/null || echo "$PRIVKEY_LINK")
   echo
   echo "# ── openchamber ─────────────────────────────────────────────────"
   emit_b64_block "openchamber_startup_env" "$OC_ENV" || miss "openchamber startup.env"
+  echo
+  echo "# ── opencode auth (provider API keys) ───────────────────────────"
+  emit_b64_block "opencode_auth" "$OPENCODE_AUTH" || miss "$HOME/.local/share/opencode/auth.json"
+  echo
+  echo "# ── discord-notify (per-project HMAC + chat IDs) ───────────────"
+  emit_b64_block "discord_notify_config" "$DISCORD_NOTIFY_CFG" || miss "$HOME/.config/discord-notify/config.yaml"
+  echo
+  echo "# ── gogcli (Gmail OAuth client creds + encrypted keyring) ───────"
+  emit_b64_block "gogcli_credentials" "$GOGCLI_CREDENTIALS" || miss "$HOME/.config/gogcli/credentials.json"
+  # The keyring is a directory of 3 encrypted blobs; pack as tar.gz + b64.
+  # Restoring requires GOG_KEYRING_PASSWORD from hermes .env to decrypt.
+  pack_dir_b64_block "gogcli_keyring_tar_gz" "$GOGCLI_KEYRING_DIR" || miss "$HOME/.config/gogcli/keyring"
+  echo
+  echo "# ── webhook-server (HMAC signing key + per-project secrets) ────"
+  emit_b64_block "webhook_server_secret" "$WEBHOOK_SERVER_DIR/secret.txt" || miss "$HOME/.config/webhook-server/secret.txt"
+  emit_b64_block "webhook_server_projects" "$WEBHOOK_SERVER_DIR/projects.yaml" || miss "$HOME/.config/webhook-server/projects.yaml"
   echo
 } > "$DEST"
 
