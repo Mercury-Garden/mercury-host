@@ -6,6 +6,8 @@ This repo describes **what this host is**: every systemd unit it owns, every ngi
 
 The companion scripts — `scripts/capture.sh` and `scripts/audit.sh` — let you (a) regenerate the declarative files from the live host, and (b) check a live host against this repo and report drift.
 
+For secrets, `scripts/backup-secrets.sh` snapshots every host secret to `~/.secrets/secrets.yaml` (mode 0600), and `scripts/restore-secrets.sh` is the inverse. The matching `secrets/secrets.yaml.template` is the sanitized version that's safe to commit.
+
 ## Why this exists
 
 Two operational pressures:
@@ -58,7 +60,50 @@ bash scripts/capture.sh
 
 # Rebuild a fresh Ubuntu 24.04 host to match this repo
 bash scripts/restore.sh
+
+# Snapshot every host secret to ~/.secrets/secrets.yaml (mode 0600)
+bash scripts/backup-secrets.sh
+
+# Restore host secrets from a backup file
+bash scripts/restore-secrets.sh --dry-run             # preview
+bash scripts/restore-secrets.sh /path/to/secrets.yaml # apply
 ```
+
+## Secrets backup & restore
+
+`scripts/backup-secrets.sh` reads every secret this host depends on and writes them to `~/.secrets/secrets.yaml` (mode 0600, dir mode 0700). The structure mirrors `secrets/inventory.yaml` one-for-one: each top-level key in the YAML corresponds to a `secrets:` entry, and each value is either a base64 literal block (for binary-ish files like SSH keys and certs) or a quoted scalar (for tokens).
+
+The matching `secrets/secrets.yaml.template` is the sanitized version with every value replaced by a `<set from ...>` placeholder. The real file is gitignored.
+
+**What the dump covers:**
+
+| Key | Source on host |
+|---|---|
+| `ssh_ed25519_private`, `ssh_ed25519_public` | `~/.ssh/id_ed25519{,pub}` |
+| `gh_hosts_yml` | `~/.config/gh/hosts.yml` |
+| `gh_token_env` | `~/.hermes/.env` GITHUB_TOKEN value |
+| `oauth2_client_secret`, `oauth2_cookie_secret` | `~/.config/oauth2-proxy/oauth2-proxy.cfg` |
+| `hermes_env` | `~/.hermes/.env` (full file) |
+| `goose_secrets` | `~/.config/goose/secrets.yaml` |
+| `letsencrypt_account_key`, `letsencrypt_privkey` | `/etc/letsencrypt/{accounts,live}/...` |
+| `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` |
+| `x_digest_env` | `~/data/code/x-digest/.env` |
+| `openchamber_startup_env` | `/home/ubuntu/.config/openchamber/startup.env` |
+| `opencode_auth` | `~/.local/share/opencode/auth.json` (3 provider API keys) |
+| `discord_notify_config` | `~/.config/discord-notify/config.yaml` (4 per-project HMAC + chat IDs) |
+| `gogcli_credentials`, `gogcli_keyring_tar_gz` | `~/.config/gogcli/credentials.json` + `keyring/` packed as tar.gz |
+| `webhook_server_secret`, `webhook_server_projects` | `~/.config/webhook-server/secret.txt` + `projects.yaml` |
+
+`scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,openchamber,opencode,discord-notify,gogcli,webhook-server`), and `--dry-run` to preview without writing. The script round-trips byte-identical for every file type (verified locally before commit).
+
+**Bootstrap a fresh host:**
+
+1. Clone this repo.
+2. Copy a real backup into place: `scp mercury:.secrets/secrets.yaml ~/.secrets/`
+3. Run `bash scripts/restore-secrets.sh` (or `--include <kind>` to stage one subsystem at a time).
+4. Restart services: `systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy webhook-server openchamber` and `sudo systemctl restart nginx`.
+
+**Rotation:** re-run `scripts/backup-secrets.sh --force` after rotating any secret. The real file is overwritten in place. The matching inventory entry in `secrets/inventory.yaml` should also be updated with the new rotation date.
 
 ## Conventions
 

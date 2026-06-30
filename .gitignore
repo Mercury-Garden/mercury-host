@@ -48,6 +48,12 @@ auth.lock
 # secrets inventory values — schema only (values/ is for any actual secrets)
 secrets/values/
 
+# Live secrets dump at ~/.secrets/ — NEVER committed.
+# The matching `secrets/secrets.yaml.template` IS committed (sanitized).
+.secrets/
+**/.secrets/
+secrets/secrets.yaml
+
 # ── build artifacts (not secrets, but unrelated noise) ──────────────────
 **/node_modules/
 **/__pycache__/
