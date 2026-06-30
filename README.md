@@ -26,30 +26,36 @@ Two operational pressures:
 ## Layout
 
 ```
-host.yaml                      # machine identity
+host.yaml                      # machine identity + Oracle Cloud metadata
 inventory.yaml                 # single source of truth — every owned piece of state
+                               #   (sections: services, nginx, packages, projects,
+                               #    cron, state_backup, oci_block_volume, etc.)
+network/                       # hostname, hosts, vcn notes
+  README.md                    # what network/ tracks + how
+  vcn-topology.md              # Oracle VCN CIDR + peering notes
+nginx/                         # vhosts + conf.d + snippets this host owns
+packages/                      # apt.list, snap.yaml, cargo.yaml, node.yaml
+secrets/                       # inventory.yaml (pointers only) + secrets.yaml.template
+                               # (sanitized example; real secrets.yaml is gitignored)
+scripts/                       # capture.sh, audit.sh, restore.sh, backup-secrets.sh,
+                               # restore-secrets.sh, backup-mercury-state.sh
+shell/                         # zsh + oh-my-zsh + starship
 systemd/                       # unit files this host owns
   system/                      # /etc/systemd/system/*
   user/                        # ~/.config/systemd/user/*
-nginx/                         # vhosts + conf.d + snippets this host owns
-letsencrypt/                   # README on cert renewal (no private keys)
 tooling/                       # AI/agent tool configs (declarative only)
-  hermes/                      # ~/.hermes (config.yaml, SOUL.md, cron/jobs.json)
   goose/                       # ~/.config/goose (config.yaml, NOT secrets.yaml)
+  oauth2-proxy/                # oauth2-proxy.cfg.example (template only; real cfg has secrets)
   opencode/                    # ~/.config/opencode (jsonc + plugin pointers)
-  claude/                      # skills as pointers, not contents
-  agents/
-shell/                         # zsh + oh-my-zsh + starship
-git/                           # .gitconfig minus creds
-gh/                            # hosts.yml minus tokens
-ssh/                           # ~/.ssh/config minus private keys
-secrets/                       # secrets/inventory.yaml — name → location → rotation procedure
-packages/                      # apt.list, snap.yaml, cargo.yaml, node.yaml
-network/                       # hostname, hosts, vcn notes
-projects/                      # tracked projects under ~/data/code/
-scripts/                       # capture.sh, audit.sh, restore.sh, backup-secrets.sh, restore-secrets.sh, backup-mercury-state.sh
+  skills-manifest.yaml         # list of installed agent skills (paths only, not contents)
 .github/workflows/             # CI gate (lint-yaml, shellcheck, secrets-scan)
 ```
+
+**Not in the repo** (intentional — captured by `scripts/backup-mercury-state.sh` instead):
+- `~/.hermes`, `~/.config/*`, `~/.local/share/opencode`, `~/.plannotator`, `~/.codegraph`,
+  `~/.ssh`, `~/.gnupg`, `~/.oh-my-zsh/custom`, `~/.zshrc` and other shell configs,
+  `~/bin/`, `~/update.sh`, `~/certbot-dns-hook.sh`, `~/wildcard-cert-instructions.md`,
+  `/etc/systemd/{system,user}`, `/etc/nginx`, `/etc/letsencrypt`. See §"State backup" below.
 
 ## Quick start
 
@@ -77,28 +83,28 @@ sudo systemctl status mercury-state-backup.timer     # daily at 03:00 America/Bo
 
 ## Secrets backup & restore
 
-`scripts/backup-secrets.sh` reads every secret this host depends on and writes them to `~/.secrets/secrets.yaml` (mode 0600, dir mode 0700). The structure mirrors `secrets/inventory.yaml` one-for-one: each top-level key in the YAML corresponds to a `secrets:` entry, and each value is either a base64 literal block (for binary-ish files like SSH keys and certs) or a quoted scalar (for tokens).
+`scripts/backup-secrets.sh` reads every secret this host depends on and writes them to `~/.secrets/secrets.yaml` (mode 0600, dir mode 0700). The top-level keys in the dump are the **output names from `backup-secrets.sh`** (snake_case, e.g. `ssh_ed25519_private`, `letsencrypt_privkey`). The authoritative **pointer list** (kebab-case ids + locations + rotation procedures) lives in `secrets/inventory.yaml`; see the table there for which keys have entries.
 
 The matching `secrets/secrets.yaml.template` is the sanitized version with every value replaced by a `<set from ...>` placeholder. The real file is gitignored.
 
-**What the dump covers:**
+**What the dump covers** (output keys from `~/.secrets/secrets.yaml`, mirroring `scripts/backup-secrets.sh`):
 
-| Key | Source on host |
-|---|---|
-| `ssh_ed25519_private`, `ssh_ed25519_public` | `~/.ssh/id_ed25519{,pub}` |
-| `gh_hosts_yml` | `~/.config/gh/hosts.yml` |
-| `gh_token_env` | `~/.hermes/.env` GITHUB_TOKEN value |
-| `oauth2_client_secret`, `oauth2_cookie_secret` | `~/.config/oauth2-proxy/oauth2-proxy.cfg` |
-| `hermes_env` | `~/.hermes/.env` (full file) |
-| `goose_secrets` | `~/.config/goose/secrets.yaml` |
-| `letsencrypt_account_key`, `letsencrypt_privkey` | `/etc/letsencrypt/{accounts,live}/...` |
-| `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` |
-| `x_digest_env` | `~/data/code/x-digest/.env` |
-| `openchamber_startup_env` | `/home/ubuntu/.config/openchamber/startup.env` |
-| `opencode_auth` | `~/.local/share/opencode/auth.json` (3 provider API keys) |
-| `discord_notify_config` | `~/.config/discord-notify/config.yaml` (4 per-project HMAC + chat IDs) |
-| `gogcli_credentials`, `gogcli_keyring_tar_gz` | `~/.config/gogcli/credentials.json` + `keyring/` packed as tar.gz |
-| `webhook_server_secret`, `webhook_server_projects` | `~/.config/webhook-server/secret.txt` + `projects.yaml` |
+| Output key | Source on host | Inventory id |
+|---|---|---|
+| `ssh_ed25519_private`, `ssh_ed25519_public` | `~/.ssh/id_ed25519{,pub}` | `ssh-ed25519-private`, `ssh-ed25519-public` |
+| `gh_hosts_yml` | `~/.config/gh/hosts.yml` | `gh-hosts-yml` |
+| `gh_token_env` | `~/.hermes/.env` GITHUB_TOKEN value | `gh-token-env` |
+| `oauth2_client_secret`, `oauth2_cookie_secret` | `~/.config/oauth2-proxy/oauth2-proxy.cfg` | `oauth2-client-secret`, `oauth2-cookie-secret` |
+| `hermes_env` | `~/.hermes/.env` (full file) | `hermes-env` |
+| `goose_secrets` | `~/.config/goose/secrets.yaml` | `goose-secrets` |
+| `letsencrypt_account_key`, `letsencrypt_privkey` | `/etc/letsencrypt/{accounts,live}/...` | `letsencrypt-account-key`, `letsencrypt-privkey` |
+| `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` | `mercury-tasks-tokens` |
+| `x_digest_env` | `~/data/code/x-digest/.env` | `x-digest-env` |
+| `openchamber_startup_env` | `~/.config/openchamber/startup.env` | `openchamber-startup-env` |
+| `opencode_auth` | `~/.local/share/opencode/auth.json` (3 provider API keys) | `opencode-auth` |
+| `discord_notify_config` | `~/.config/discord-notify/config.yaml` (4 per-project HMAC + chat IDs) | `discord-notify-config` |
+| `gogcli_credentials`, `gogcli_keyring_tar_gz` | `~/.config/gogcli/credentials.json` + `keyring/` packed as tar.gz | `gogcli-credentials` |
+| `webhook_server_secret`, `webhook_server_projects` | `~/.config/webhook-server/secret.txt` + `projects.yaml` | `webhook-server-secret`, `webhook-server-projects` |
 
 `scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,openchamber,opencode,discord-notify,gogcli,webhook-server`), and `--dry-run` to preview without writing. The script round-trips byte-identical for every file type (verified locally before commit).
 
@@ -122,17 +128,30 @@ Together they survive both host-loss (Oracle snapshot → new instance) and acci
 
 ### What the local tarball captures
 
-Every path that is hard to recreate from scratch and easy to forget:
+The exact list is `BACKUP_PATHS` at the top of `scripts/backup-mercury-state.sh` (the
+authoritative source — this README mirrors it). At the time of writing:
 
-- **AI/agent tools**: `~/.hermes`, `~/.config/{goose,opencode,discord-notify,oauth2-proxy,mercury-tasks,openchamber,webhook-server,gogcli}`, `~/.local/share/opencode`, `~/.claude/skills`
-- **Shell + editor**: `~/.zshrc`, `~/.bashrc`, `~/.gitconfig`, `~/.gitignore_global`, `~/.oh-my-zsh/custom`
-- **Code graph + plans**: `~/.plannotator`, `~/.codegraph`
-- **Security**: `~/.ssh`, `~/.gnupg` (config + public keys, no private key material — that goes in secrets)
-- **Repos**: `~/data/code/mercury-host` (this repo)
-- **Scripts**: `~/bin/`, `~/update.sh`, `~/certbot-dns-hook.sh`, `~/wildcard-cert-instructions.md`
-- **System config**: `/etc/systemd/system/`, `/etc/nginx/`, `/etc/letsencrypt/`
+- **AI/agent tools**: `/home/ubuntu/.hermes`, `/home/ubuntu/.config` (whole tree, including
+  `goose/`, `opencode/`, `discord-notify/`, `oauth2-proxy/`, `mercury-tasks/`, `openchamber/`,
+  `webhook-server/`, `gogcli/`, `gh/`, `htop/`, `openspec/`, `pnpm/`, `uv/`, etc.),
+  `/home/ubuntu/.local/share/opencode`, `/home/ubuntu/.oh-my-zsh/custom`
+- **Code graph + plans**: `/home/ubuntu/.plannotator`, `/home/ubuntu/.codegraph`
+- **Security**: `/home/ubuntu/.ssh` (config + public keys; private key captured by
+  `backup-secrets.sh`, not here), `/home/ubuntu/.gnupg`
+- **Repos**: `/home/ubuntu/data/code/mercury-host` (this repo)
+- **Scripts**: `/home/ubuntu/bin`, `/home/ubuntu/update.sh`,
+  `/home/ubuntu/certbot-dns-hook.sh`, `/home/ubuntu/wildcard-cert-instructions.md`
+- **Shell**: `/home/ubuntu/.zshrc`, `/home/ubuntu/.zshenv`, `/home/ubuntu/.profile`,
+  `/home/ubuntu/.gitconfig` (`.bashrc` and `.gitignore_global` are not captured —
+  the host only uses zsh, not bash, and there is no global gitignore)
+- **System config**: `/etc/systemd/system`, `/etc/systemd/user`, `/etc/nginx`,
+  `/etc/letsencrypt`
 
-**Excluded** (recreatable, too big, or not worth the noise): `node_modules`, `.pnpm-store`, `.git/objects`, Volta toolchains, model caches, audio cache, `~/.cache/go-build`.
+**Excluded** (`EXCLUDES` in `scripts/backup-mercury-state.sh`, authoritative): `*.log`,
+`*.log.*`, `__pycache__`, `*.pyc`, `*.wasm`, `*.map`, `node_modules`, `.pnpm-store`,
+`coverage`, `test-results`, `playwright-report`, `web/dist`, `.git`, `.cache`,
+`.cargo/registry`, `.rustup/toolchains`, `.npm`, `.bun`, `.local/share/uv`,
+`.local/share/pnpm/store`, `.local/share/Trash`, `.volta`, `.secrets/secrets.yaml`.
 
 ### Restore from the local tarball
 

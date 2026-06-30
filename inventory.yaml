@@ -119,7 +119,7 @@ cron:
   user_crontab: null
   hermes:
     jobs_file: ~/.hermes/cron/jobs.json
-    jobs::
+    jobs:
       - id: 59b7302d21b7
         name: x-digest-daily
         schedule: "0 14 * * 1-5"
@@ -156,6 +156,28 @@ state_backup:
   last_verify_ok: "5/5"
   last_verify_at: "2026-06-30T19-51-23Z"
   tarballs_on_disk: 1
+  oci_block_volume:
+    # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via
+    # `oci bv volume-backup-policy assign` from a laptop with OCI CLI; runs
+    # automatically on Oracle's infra thereafter. Documented here so
+    # `audit.sh` and DR runbooks have a single source of truth for these
+    # identifiers — if anything changes (volume recreated, region migrated,
+    # AD swapped), update this block and the docs.
+    region: us-chicago-1
+    availability_domain: gKwy:US-CHICAGO-1-AD-1
+    compartment_id: ocid1.tenancy.oc1..aaaaaaaamwf47b2mqs2uqs3mina7kqvexqhxzzov6ocgmgbm5pxyi5mn65pq
+    volume_id: ocid1.volume.oc1.us-chicago-1.abxxeljthy26gscgtw3evixaosbfvofmkh52y364u2kz5zmbvxyzvriobulq
+    policy_id: ocid1.volumebackuppolicy.oc1.us-chicago-1.amaaaaaatfnkbfyau77livmfn4ljv7ncn45uiyjypuo5vs5lqvouibada7ja
+    first_manual_backup_id: ocid1.volumebackup.oc1.us-chicago-1.abxxeljtexdatkoqf4guce6h3nmj75klg7obtit6ydztpccb4intbry3zidq
+    first_manual_backup_created: "2026-06-30T19:13:40Z"
+    schedule: monthly, 1st of month at 03:00 UTC, retained 90 days
+    free_tier_slots_used: 1   # Always Free = 5 total (boot + data combined)
+    note: |
+      To restore: `oci bv volume create --availability-domain gKwy:US-CHICAGO-1-AD-1
+      --region us-chicago-1 --compartment-id <tenancy-ocid>
+      --source-volume-backup-id <backup-ocid>` then attach via
+      `oci compute volume-attachment create`. See README §"Oracle Cloud
+      Block Volume backup" for the full recipe.
 
 node_managers:
   volta:
