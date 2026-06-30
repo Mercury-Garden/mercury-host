@@ -3,7 +3,7 @@ Description=mercury-tasks (Fastify API + Vue 3 SPA)
 After=network.target
 
 [Service]
-WorkingDirectory=/home/ubuntu/mercury-tasks
+WorkingDirectory=/home/ubuntu/data/code/mercury-tasks
 ExecStart=/home/ubuntu/.volta/bin/pnpm start
 # systemd starts with a minimal PATH that excludes /home/ubuntu/.volta/bin.
 # pnpm's deps-status check spawns a sub-process named `pnpm` via PATH lookup,
