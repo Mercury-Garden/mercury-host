@@ -70,6 +70,15 @@ services:
     repo: local
     managed_by: human+mercutio
 
+  - id: obscura-mcp
+    kind: systemd-user
+    unit: systemd/user/obscura-mcp.service
+    binds:
+      - 127.0.0.1:3000
+    description: "Obscura Rust headless browser, MCP server mode. Provides mcp_obscura_* tools to Hermes."
+    repo: h4ckf0r0day/obscura   # release-tarball install (recoverable; rebuild via docs)
+    managed_by: mercutio
+
   - id: session-migration
     kind: systemd-user
     unit: /usr/lib/systemd/user/session-migration.service   # Ubuntu package, do not own
