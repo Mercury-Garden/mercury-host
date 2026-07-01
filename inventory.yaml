@@ -14,6 +14,13 @@ services:
     description: "Hermes Agent gateway (main thread)"
     repo: "local install via Hermes installer"
     managed_by: human+mercutio
+    stt_backend:
+      provider: local
+      package: faster-whisper   # in ~/.hermes/hermes-agent/venv
+      model: small              # 464 MB, Systran/faster-whisper-small
+      language_pin: es          # skips auto-detect on inbound voice
+      ffmpeg_required: true     # already in packages/apt.list
+      declarative_record: tooling/faster-whisper/README.md
 
   - id: hermes-dashboard
     kind: systemd-system

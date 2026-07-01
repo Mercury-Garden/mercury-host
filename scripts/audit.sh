@@ -163,6 +163,29 @@ for svc in nginx ollama cron hermes-dashboard; do
   fi
 done
 
+# ── 4b. Hermes STT backend ──────────────────────────────────────────────
+# Tracks the local STT install that backs Hermes' Spanish-voice-message
+# transcription. The pip package lives in the hermes-agent venv; the model
+# cache downloads on first use.
+echo
+echo "[stt]"
+HERMES_VENV="/home/ubuntu/.hermes/hermes-agent/venv"
+if /home/ubuntu/.hermes/hermes-agent/venv/bin/python3 -c "import faster_whisper" >/dev/null 2>&1; then
+  ok "faster-whisper installed in hermes-agent venv"
+else
+  drift "faster-whisper missing from hermes-agent venv (run: ${HERMES_VENV}/bin/python3 -m pip install faster-whisper)"
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  ok "ffmpeg present ($(command -v ffmpeg))"
+else
+  drift "ffmpeg missing (apt: ffmpeg)"
+fi
+if [ -d "$HOME/.cache/huggingface/hub/models--Systran--faster-whisper-small" ]; then
+  ok "faster-whisper 'small' model cached"
+else
+  note "faster-whisper 'small' model not yet downloaded — will download on first voice message"
+fi
+
 # ── 5. nginx vhosts enabled ──────────────────────────────────────────────
 # nginx includes both regular files AND symlinks from sites-enabled/.
 # Use -e (any exists) instead of -L (only symlink).
