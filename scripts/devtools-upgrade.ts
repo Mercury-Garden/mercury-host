@@ -69,6 +69,20 @@ import { homedir } from 'node:os'
 
 const HOME = homedir()
 
+// ─── Volta path resolution ─────────────────────────────────────────────────
+// The hermes-gateway.service runs this script under a sanitized PATH that
+// historically did NOT include ~/.volta/bin, so bare `node` / `volta` / `npm`
+// invocations resolved to the hermes-bundled toolchain (~/.hermes/node) — a
+// different node major, and a missing volta. That surfaced as a phantom
+// `node: failed (volta: not found)` line every cron tick. To stay correct
+// regardless of the parent process's PATH, we resolve volta's bin dir once
+// at startup and prepend it to every exec() call's environment.
+//
+// VOLTA_HOME may be set explicitly (e.g. by the user's shell rc). Default
+// to ~/.volta. The bin dir is whatever lives at $VOLTA_HOME/bin.
+const VOLTA_HOME_DIR = process.env.VOLTA_HOME || join(HOME, '.volta')
+const VOLTA_BIN = join(VOLTA_HOME_DIR, 'bin')
+
 // ─── JSON-line output ──────────────────────────────────────────────────────
 // The cron prompt reads stdout line-delimited. Keep this line shape stable.
 type ToolLine = {
@@ -94,7 +108,18 @@ const timed = async <T>(fn: () => Promise<T>): Promise<{ value: T | null; ms: nu
 }
 
 const exec = (cmd: string, opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {}): string => {
-  const env = { ...process.env, ...(opts.env || {}) } as NodeJS.ProcessEnv
+  // Always run with VOLTA_BIN at the front of PATH so bare `node` / `npm` /
+  // `pnpm` / `volta` invocations resolve to the user-managed toolchain even
+  // when the parent process's PATH (e.g. hermes-gateway.service) does not
+  // include it. We also propagate VOLTA_HOME in case the child process
+  // shells out further.
+  const basePath = process.env.PATH || ''
+  const env = {
+    ...process.env,
+    VOLTA_HOME: VOLTA_HOME_DIR,
+    PATH: `${VOLTA_BIN}:${basePath}`,
+    ...(opts.env || {}),
+  } as NodeJS.ProcessEnv
   return execSync(cmd, {
     timeout: opts.timeout ?? 60_000,
     env,
