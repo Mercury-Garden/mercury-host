@@ -22,6 +22,24 @@ services:
       ffmpeg_required: true     # already in packages/apt.list
       declarative_record: tooling/faster-whisper/README.md
 
+  # ── mercury-butler profile gateway (second Discord app) ──────────────────
+  - id: hermes-gateway-mercury-butler
+    kind: systemd-user
+    unit: systemd/user/hermes-gateway-mercury-butler.service
+    binds: []
+    description: "Hermes Agent gateway for the mercury-butler profile (Discord app 1491578957823344782; Node.js OSS reporting + health advisor)"
+    repo: "local install via Hermes installer"
+    managed_by: human+mercutio
+    notes:
+      discord_app_id: "1491578957823344782"
+      purpose: |
+        Owns Node.js OSS reporting (nodejs/node + edsadr/node) and personal
+        health advisor. Default profile continues to own better-bet,
+        mercury-tasks, webhook-server, x-digest, mercury-host, and other
+        own repos.
+      scopes_needed: "bot + Send Messages + Read Message History + Embed Links"
+      profile_dir: "~/.hermes/profiles/mercury-butler (not tracked; lives under HERMES_HOME)"
+
   - id: hermes-dashboard
     kind: systemd-system
     unit: systemd/system/hermes-dashboard.service
