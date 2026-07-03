@@ -238,6 +238,35 @@ WEBHOOK_SERVER_DIR="${HOME}/.config/webhook-server"
   echo
   echo "# ── Hermes ──────────────────────────────────────────────────────"
   emit_b64_block "hermes_env" "${HOME}/.hermes/.env" || miss "$HOME/.hermes/.env"
+  # Per-profile envs. Auto-discovered: any ~/.hermes/profiles/<name>/.env
+  # becomes `hermes_profile_<name>_env` (b64). Its GITHUB_TOKEN value (if
+  # present) is also emitted as `gh_token_env_profile_<name>` (scalar) so
+  # a restore can put the right token in the right file even if the .env
+  # is otherwise empty. Profile names with hyphens are preserved verbatim
+  # in the YAML key (YAML allows them) and the dash-separated kind
+  # identifier used by restore-secrets.sh --include.
+  PROFILES_DIR="${HOME}/.hermes/profiles"
+  if [ -d "$PROFILES_DIR" ]; then
+    for PROF_ENV in "$PROFILES_DIR"/*/.env; do
+      [ -f "$PROF_ENV" ] || continue
+      PROF_NAME=$(basename "$(dirname "$PROF_ENV")")
+      KEY="hermes_profile_${PROF_NAME}_env"
+      if emit_b64_block "$KEY" "$PROF_ENV"; then
+        ok "$KEY captured"
+        PROF_TOKEN="$(read_env_value "$PROF_ENV" GITHUB_TOKEN || true)"
+        if [ -n "$PROF_TOKEN" ]; then
+          emit_scalar_inline "gh_token_env_profile_${PROF_NAME}" "$PROF_TOKEN"
+          ok "gh_token_env_profile_${PROF_NAME} captured"
+        else
+          echo "gh_token_env_profile_${PROF_NAME}: null"
+        fi
+      else
+        miss "$PROF_ENV"
+      fi
+    done
+  else
+    note "$PROFILES_DIR not present; skipping per-profile hermes envs"
+  fi
   echo
   echo "# ── Goose ───────────────────────────────────────────────────────"
   emit_b64_block "goose_secrets" "${HOME}/.config/goose/secrets.yaml" || miss "$HOME/.config/goose/secrets.yaml"

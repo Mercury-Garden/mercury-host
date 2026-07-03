@@ -12,16 +12,25 @@
 #   ssh          SSH keypair
 #   github       gh CLI hosts.yml + GITHUB_TOKEN env
 #   oauth2       oauth2-proxy client/cookie secrets
-#   hermes       full ~/.hermes/.env
+#   hermes       full ~/.hermes/.env (default profile)
+#   hermes-profile-<name>   full ~/.hermes/profiles/<name>/.env (per-profile)
 #   goose        ~/.config/goose/secrets.yaml
 #   letsencrypt  ACME account key + privkey
 #   mercury-tasks   /home/ubuntu/.config/mercury-tasks/tokens.json
 #   x-digest     ~/data/code/x-digest/.env
-#   openchamber  /home/ubuntu/.config/openchamber/startup.env
+#   openchamber  ~/.config/openchamber/startup.env
 #   opencode    ~/.local/share/opencode/auth.json
 #   discord-notify  ~/.config/discord-notify/config.yaml
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
 #   webhook-server  ~/.config/webhook-server/secret.txt + projects.yaml
+#
+# Per-profile note: `hermes-profile-<name>` kinds are NOT enumerated
+# statically — restore-secrets.sh scans the source YAML for any
+# `hermes_profile_<name>_env` block and registers a matching include kind
+# automatically. Add a profile → run a new backup → restore picks it up
+# without any code change here. The same applies to the
+# `gh_token_env_profile_<name>` scalars, which are restored alongside
+# their owning profile.
 #
 # This script is the inverse of backup-secrets.sh. It writes files with
 # the same modes the originals had on the source host (0600 for secrets,
@@ -229,6 +238,20 @@ if [ $DRY_RUN -eq 1 ]; then
   if in_include hermes; then
     echo "  hermes:     ~/.hermes/.env            (mode 0600)"
   fi
+  # Per-profile hermes envs (auto-discovered from the source YAML).
+  DRY_PROFILE_KEYS=$(python3 - "$SRC" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+for m in re.finditer(r'^hermes_profile_([A-Za-z0-9_-]+)_env:\s*\|', text, re.MULTILINE):
+    print(m.group(1))
+PYEOF
+)
+  for PROF_NAME in $DRY_PROFILE_KEYS; do
+    KIND="hermes-profile-${PROF_NAME}"
+    if in_include "$KIND"; then
+      echo "  ${KIND}:  ~/.hermes/profiles/${PROF_NAME}/.env  (mode 0600)"
+    fi
+  done
   if in_include goose; then
     echo "  goose:      ~/.config/goose/secrets.yaml  (mode 0600)"
   fi
@@ -345,15 +368,64 @@ PYEOF
   fi
 fi
 
-# ── Hermes ──────────────────────────────────────────────────────────────
+# ── Hermes (default profile) ────────────────────────────────────────────
 if in_include hermes; then
-  note "restoring hermes env..."
+  note "restoring hermes env (default profile)..."
   mkdir -p "${HOME}/.hermes"
   if decode_b64_block "hermes_env" "${HOME}/.hermes/.env" 0600; then
     ok "hermes_env"
   else
     warn "hermes_env: SKIPPED (null in source)"
   fi
+fi
+
+# ── Hermes (per-profile) ───────────────────────────────────────────────
+# Discover all `hermes_profile_<name>_env` blocks in the source and
+# register them as `hermes-profile-<name>` kinds (or auto-restore them
+# when no --include filter is in effect). Profile names with hyphens
+# (e.g. `mercury-butler`) become include kinds `hermes-profile-mercury-butler`.
+# The matching `gh_token_env_profile_<name>` scalar, if present, is also
+# written into the same per-profile .env (only if GITHUB_TOKEN is missing
+# from the decoded file — never overwrites an existing token).
+PROFILE_KEYS=$(python3 - "$SRC" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+for m in re.finditer(r'^hermes_profile_([A-Za-z0-9_-]+)_env:\s*\|', text, re.MULTILINE):
+    print(m.group(1))
+PYEOF
+)
+if [ -n "$PROFILE_KEYS" ]; then
+  while IFS= read -r PROF_NAME; do
+    [ -n "$PROF_NAME" ] || continue
+    KIND="hermes-profile-${PROF_NAME}"
+    if in_include "$KIND"; then
+      note "restoring hermes profile: ${PROF_NAME}..."
+      PROF_DIR="${HOME}/.hermes/profiles/${PROF_NAME}"
+      mkdir -p "$PROF_DIR"
+      B64_KEY="hermes_profile_${PROF_NAME}_env"
+      if decode_b64_block "$B64_KEY" "${PROF_DIR}/.env" 0600; then
+        ok "$B64_KEY"
+        # If a gh_token_env_profile_<name> scalar exists AND the decoded
+        # .env is missing GITHUB_TOKEN, append it. (Decoded .env takes
+        # precedence; we never overwrite an in-file token.)
+        SCALAR_KEY="gh_token_env_profile_${PROF_NAME}"
+        if grep -q "^${SCALAR_KEY}: \"" "$SRC" && ! grep -q '^GITHUB_TOKEN=' "${PROF_DIR}/.env"; then
+          TOKEN=$(python3 -c "
+import re, pathlib
+text = pathlib.Path('$SRC').read_text()
+m = re.search(r'^${SCALAR_KEY}:\s*\"(.*)\"\s*\$', text, re.MULTILINE)
+if m: print(m.group(1).replace('\\\\\\\\', '\x00').replace('\\\\\"', '\"').replace('\x00', '\\\\'))
+")
+          if [ -n "$TOKEN" ]; then
+            echo "GITHUB_TOKEN=$TOKEN" >> "${PROF_DIR}/.env"
+            ok "$SCALAR_KEY appended to ${PROF_DIR}/.env"
+          fi
+        fi
+      else
+        warn "$B64_KEY: SKIPPED (null in source)"
+      fi
+    fi
+  done <<< "$PROFILE_KEYS"
 fi
 
 # ── Goose ───────────────────────────────────────────────────────────────
