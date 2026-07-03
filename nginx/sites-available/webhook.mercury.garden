@@ -27,7 +27,7 @@ server {
     # inside the webhook-server, not by nginx. Pass the raw body through
     # so the HMAC computation matches byte-for-byte.
     location = /webhook/github {
-        proxy_pass http://127.0.0.1:3939/webhook/github;
+        proxy_pass http://127.0.0.1:8644/webhooks/gh-arc-merge;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -44,12 +44,12 @@ server {
     # so the public HTTPS port returns 404 for them. Access from the
     # host with: curl http://127.0.0.1:3939/healthz
     location /healthz {
-        proxy_pass http://127.0.0.1:3939/healthz;
+        proxy_pass http://127.0.0.1:8644/health;
         allow 127.0.0.1;
         deny all;
     }
     location = /recent {
-        proxy_pass http://127.0.0.1:3939/recent;
+        proxy_pass http://127.0.0.1:8644/health;
         allow 127.0.0.1;
         deny all;
     }
