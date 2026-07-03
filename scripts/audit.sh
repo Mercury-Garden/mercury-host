@@ -451,6 +451,127 @@ SB_DRIFT=$(echo "$SB_OUT" | grep '__SB_DRIFT__:' | tail -1 | sed 's/.*://')
 SB_DRIFT=${SB_DRIFT:-0}
 DRIFT=$((DRIFT + SB_DRIFT))
 
+# ── 11. Web search backend (Hermes web_search / web_extract) ────────────
+echo
+echo "[web_search]"
+WS_OUT=$(python3 - "$INV" 2>&1 <<'PYEOF'
+import os, pathlib, re, sys
+
+inv_path = pathlib.Path(sys.argv[1])
+text = inv_path.read_text()
+home = pathlib.Path.home()
+
+def get_value(block, key):
+    m = re.search(rf'^  {re.escape(key)}:\s*(.*)$', block, re.MULTILINE)
+    if not m:
+        return None
+    v = m.group(1).strip()
+    v = re.split(r'\s+#', v, maxsplit=1)[0].strip()
+    if v in ('null', '~', ''):
+        return None
+    if v.startswith('"') and v.endswith('"'):
+        return v[1:-1]
+    return v
+
+# Parse web_search: section
+ws = re.search(r'^web_search:\n((?:  [^\n]*\n)+)', text, re.MULTILINE)
+if not ws:
+    print("  ! web_search: section not found in inventory, skipping")
+    print("__WS_DRIFT__:0")
+    sys.exit(0)
+block = ws.group(1)
+
+expected_backend = get_value(block, 'backend')
+expected_search = get_value(block, 'search_backend')
+expected_extract = get_value(block, 'extract_backend')
+
+# Parse keys_present_in_default_profile: list and _mercury_butler_profile: list
+def get_list(block, prefix):
+    """Parse `prefix:` followed by indented `- name` entries, return set."""
+    m = re.search(rf'^  {re.escape(prefix)}:\n((?:    - [^\n]*\n)*)', block, re.MULTILINE)
+    if not m:
+        return set()
+    return set(re.findall(r'^\s*- (\S+)', m.group(1), re.MULTILINE))
+
+expected_default_keys = get_list(block, 'keys_present_in_default_profile')
+expected_butler_keys = get_list(block, 'keys_present_in_mercury_butler_profile')
+
+drift = 0
+
+# 1. Live config.yaml: default profile
+cfg_path = home / '.hermes' / 'config.yaml'
+def read_web_backends(path):
+    """Return (backend, search_backend, extract_backend) or all-None if missing."""
+    if not path.exists():
+        return None, None, None
+    raw = path.read_text()
+    def get(k):
+        m = re.search(rf'^{k}:\s*(.*)$', raw, re.MULTILINE)
+        if not m:
+            return None
+        v = m.group(1).strip().strip('"').strip("'")
+        return v if v else None
+    return get('web.backend'), get('web.search_backend'), get('web.extract_backend')
+
+def check_profile(name, env_path, cfg_path, expected_keys, expected_backend):
+    """Check a profile's web config + key presence. Returns drift count."""
+    d = 0
+    # Backend check (if expected)
+    if expected_backend:
+        live_b, live_s, live_e = read_web_backends(cfg_path)
+        if live_b is None and live_s is None and live_e is None:
+            # No web: block at all in config — could be intentional (uses default)
+            # We only drift if the user explicitly stated this profile should have tavily.
+            pass
+        else:
+            # A web: block exists — check it matches
+            for label, live, exp in [
+                ('backend', live_b, expected_backend),
+                ('search_backend', live_s, expected_search),
+                ('extract_backend', live_e, expected_extract),
+            ]:
+                if live and exp and live != exp:
+                    print(f"  ✗ DRIFT: {name} web.{label} = {live!r}, expected {exp!r}")
+                    d += 1
+                elif live and exp and live == exp:
+                    pass  # ok
+                elif not live and exp:
+                    print(f"  ✗ DRIFT: {name} web.{label} is empty, expected {exp!r}")
+                    d += 1
+    # Keys check
+    if env_path.exists():
+        env_text = env_path.read_text()
+        for k in expected_keys:
+            if not re.search(rf'^{re.escape(k)}=', env_text, re.MULTILINE):
+                print(f"  ✗ DRIFT: {k} missing from {env_path}")
+                d += 1
+        if not d:
+            print(f"  ✓ {name}: {len(expected_keys)} keys present" +
+                  (f" + web.backend={expected_backend}" if expected_backend else ""))
+    else:
+        print(f"  ✗ DRIFT: {env_path} does not exist")
+        d += 1
+    return d
+
+# Default profile: backend expected = tavily
+drift += check_profile(
+    'default', home / '.hermes' / '.env', cfg_path,
+    expected_default_keys, expected_backend)
+# mercury-butler: keys expected, backend intentionally not activated
+drift += check_profile(
+    'mercury-butler',
+    home / '.hermes' / 'profiles' / 'mercury-butler' / '.env',
+    home / '.hermes' / 'profiles' / 'mercury-butler' / 'config.yaml',
+    expected_butler_keys, None)
+
+print(f"__WS_DRIFT__:{drift}")
+PYEOF
+)
+echo "$WS_OUT" | grep -v '__WS_DRIFT__:' || true
+WS_DRIFT=$(echo "$WS_OUT" | grep '__WS_DRIFT__:' | tail -1 | sed 's/.*://')
+WS_DRIFT=${WS_DRIFT:-0}
+DRIFT=$((DRIFT + WS_DRIFT))
+
 # ── summary ──────────────────────────────────────────────────────────────
 echo
 if [ "$DRIFT" -eq 0 ]; then
