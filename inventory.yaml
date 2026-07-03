@@ -145,12 +145,6 @@ cron:
       - id: 98b672bf950a
         name: devtools-upgrade
         schedule: "0 11 * * *"
-      - id: e7239d6f904e
-        name: auto-arc-advance
-        # PAUSED — superseded by GitHub webhook route (gh-arc-merge on :8644).
-        # Kept in inventory + jobs.json for reference; remove both when
-        # confident the webhook route is stable.
-        schedule: "every 1m"
   # Per-profile cron jobs (one block per Hermes profile). Each block lists
   # the jobs in that profile's ~/.hermes/profiles/<name>/cron/jobs.json so
   # `audit.sh` can verify drift between the manifest and reality. Profiles
