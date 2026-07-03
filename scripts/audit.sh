@@ -288,7 +288,7 @@ else:
     for p in sorted(extra):
         print(f"  ✗ DRIFT: {p} on host but not in inventory")
 
-# Hermes jobs: parse jobs.json, count
+# Hermes jobs (default profile): parse jobs.json, count
 jobs_file = home / '.hermes' / 'cron' / 'jobs.json'
 drift = len(missing) + len(extra)
 if jobs_file.exists():
@@ -306,6 +306,41 @@ if jobs_file.exists():
         drift += 1
 else:
     print(f"  ! {jobs_file} not present, skipping hermes.jobs check")
+
+# Hermes jobs (per-profile): walk the hermes_profiles: block. Each profile
+# has a `jobs_file:` path and a `jobs:` list. We count declared jobs in
+# YAML vs the live jobs.json on disk. (Profiles without jobs: blocks
+# contribute zero, which is fine for a profile that doesn't run crons.)
+# Profile blocks look like:
+#   hermes_profiles:
+#     - profile: mercury-butler
+#       jobs_file: ~/.hermes/profiles/mercury-butler/cron/jobs.json
+#       jobs:
+#         - id: ...
+prof_blocks = re.findall(
+    r'^    - profile:\s*(\S+)\n(?:      [^\n]*\n)*?      jobs_file:\s*(\S+)\n      jobs:\n((?:        [^\n]*\n)*)',
+    text, re.MULTILINE)
+if prof_blocks:
+    for prof_name, prof_jobs_file, prof_jobs_block in prof_blocks:
+        prof_jobs_file = prof_jobs_file.replace('~', str(home))
+        # Count declared jobs in this profile's `jobs:` list (lines that
+        # look like `        - id: ...`)
+        declared = len(re.findall(r'^        - id: ', prof_jobs_block, re.MULTILINE))
+        prof_path = pathlib.Path(prof_jobs_file)
+        if prof_path.exists():
+            try:
+                jd = json.loads(prof_path.read_text())
+                live = len(jd.get('jobs', []))
+                if live == declared:
+                    print(f"  ✓ hermes.jobs ({prof_name}): {live} jobs match inventory")
+                else:
+                    print(f"  ✗ DRIFT: hermes.jobs ({prof_name}) live={live} inventory={declared}")
+                    drift += 1
+            except json.JSONDecodeError as e:
+                print(f"  ✗ hermes.jobs ({prof_name}): jobs.json parse error: {e}")
+                drift += 1
+        else:
+            print(f"  ! {prof_jobs_file} not present, skipping hermes.jobs ({prof_name}) check")
 
 # Emit the drift count on its own line so the parent shell can grep it.
 print(f"__CRON_DRIFT__:{drift}")

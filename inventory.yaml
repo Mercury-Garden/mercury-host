@@ -166,6 +166,27 @@ cron:
       - id: 98b672bf950a
         name: devtools-upgrade
         schedule: "0 11 * * *"
+  # Per-profile cron jobs (one block per Hermes profile). Each block lists
+  # the jobs in that profile's ~/.hermes/profiles/<name>/cron/jobs.json so
+  # `audit.sh` can verify drift between the manifest and reality. Profiles
+  # are enumerated statically (not auto-discovered) to keep the manifest
+  # authoritative — if you add a profile, add a block here.
+  hermes_profiles:
+    - profile: mercury-butler
+      jobs_file: ~/.hermes/profiles/mercury-butler/cron/jobs.json
+      jobs:
+        - id: 2a3ef8c2da41
+          name: node-clone-refresh
+          schedule: "0 8 * * *"
+        - id: e727bea3be59
+          name: health-morning
+          schedule: "0 8 * * *"
+        - id: 0d04b6961c88
+          name: node-core-daily
+          schedule: "0 9 * * *"
+        - id: aee156dfb5ec
+          name: health-evening
+          schedule: "0 22 * * *"
   system_timers:
     - certbot.timer
     - apt-daily.timer
@@ -186,13 +207,13 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-06-30T19-50-28Z"
-  last_size_mb: 435
-  last_file_count: 22226
-  last_sha256: "d2c2d7ca9f54e02a8de0c6e6a17565c65c8bf81fb378fabe39bc5d213d9ba25b"
+  last_run_at: "2026-07-02T08-00-25Z"
+  last_size_mb: 500
+  last_file_count: 24242
+  last_sha256: "712064846451b2bea1165e9709e3c9c10f49da015c8f4732610c3df8a62656f7"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-06-30T19-51-23Z"
-  tarballs_on_disk: 1
+  last_verify_at: "2026-07-02T08-01-16Z"
+  tarballs_on_disk: 3
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via
     # `oci bv volume-backup-policy assign` from a laptop with OCI CLI; runs
@@ -229,6 +250,7 @@ node_managers:
     home: ~/.hermes/node
     node: 22.23.0
     npm: 10.9.8
+    pnpm: null
     purpose: "Hermes gateway runtime; not user-managed"
 
 projects_root: ~/data/code
@@ -257,7 +279,7 @@ projects:
     package_manager: pnpm@11.9.0
     pinned_node: 24.18.0
     expected_branch: main
-    lockfile_sha256: 8e70e503f2eb    # capture.sh: refreshed scriptcaster
+    lockfile_sha256: ef187c911bcc    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
     volta_pinned: true
 
