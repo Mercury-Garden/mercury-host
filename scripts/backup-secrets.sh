@@ -179,6 +179,12 @@ OAUTH2_CLIENT_SECRET="$(read_oauth2_key "$OAUTH2_CFG" client_secret || true)"
 OAUTH2_COOKIE_SECRET="$(read_oauth2_key "$OAUTH2_CFG" cookie_secret || true)"
 MT_TOKENS="/home/ubuntu/.config/mercury-tasks/tokens.json"
 XD_ENV="${HOME}/data/code/x-digest/.env"
+# Per-project .env files. These live under ~/data/code/<repo>/.env (mode 0600)
+# and are NOT in the daily BACKUP_PATHS list (those are dotfile roots, not
+# per-project) — they MUST be captured here so a dropped .env is recoverable
+# in <1 min via `bash scripts/restore-secrets.sh`. Keep this list in sync
+# with `inventory.yaml → projects[]` paths AND with `secrets/inventory.yaml`.
+SC_ENV="${HOME}/data/code/scriptcaster/.env"
 OC_ENV="${HOME}/.config/openchamber/startup.env"
 ACCT_KEY="$(find /etc/letsencrypt/accounts -name account_key.json 2>/dev/null | head -1 || true)"
 PRIVKEY_LINK="/etc/letsencrypt/live/mercury.garden/privkey.pem"
@@ -283,6 +289,11 @@ WEBHOOK_SERVER_DIR="${HOME}/.config/webhook-server"
   echo
   echo "# ── x-digest ────────────────────────────────────────────────────"
   emit_b64_block "x_digest_env" "$XD_ENV" || miss "x-digest .env"
+  echo
+  echo "# ── scriptcaster ───────────────────────────────────────────────"
+  # ElevenLabs / Fish Audio / Cartesia / HuggingFace / Langfuse / MiniMax keys.
+  # Captured as b64 block (key name in secrets.yaml: scriptcaster_env).
+  emit_b64_block "scriptcaster_env" "$SC_ENV" || miss "scriptcaster .env"
   echo
   echo "# ── openchamber ─────────────────────────────────────────────────"
   emit_b64_block "openchamber_startup_env" "$OC_ENV" || miss "openchamber startup.env"

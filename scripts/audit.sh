@@ -352,6 +352,40 @@ CRON_DRIFT=$(echo "$CRON_OUT" | grep '__CRON_DRIFT__:' | tail -1 | sed 's/.*://'
 CRON_DRIFT=${CRON_DRIFT:-0}
 DRIFT=$((DRIFT + CRON_DRIFT))
 
+# ── 9b. Project env files (per-repo .env presence + mode 0600) ──────────
+# Drift on this section catches the recurring incident: an agent (or a manual
+# cleanup) drops /home/ubuntu/data/code/<repo>/.env and the cron for that repo
+# fails silently the next morning. The fix surfaces immediately.
+echo
+echo "[project_env]"
+# Each line is "label:path". Keep this list in sync with backup-secrets.sh
+# (where the same paths are captured as b64 blocks) and secrets/inventory.yaml
+# (pointer entries).
+PROJECT_ENVS=(
+  "x-digest:${HOME}/data/code/x-digest/.env"
+  "scriptcaster:${HOME}/data/code/scriptcaster/.env"
+  "mercury-tasks:${HOME}/.config/mercury-tasks/tokens.json"
+  "openchamber:${HOME}/.config/openchamber/startup.env"
+)
+PE_DRIFT=0
+for entry in "${PROJECT_ENVS[@]}"; do
+  label="${entry%%:*}"
+  path="${entry#*:}"
+  if [ -f "$path" ]; then
+    mode=$(stat -c '%a' "$path")
+    if [ "$mode" = "600" ]; then
+      echo "  ✓ $label: present, mode 0600"
+    else
+      echo "  ✗ DRIFT: $label: mode $mode (want 600) at $path"
+      PE_DRIFT=$((PE_DRIFT + 1))
+    fi
+  else
+    echo "  ✗ DRIFT: $label: MISSING at $path — cron for this repo will fail"
+    PE_DRIFT=$((PE_DRIFT + 1))
+  fi
+done
+DRIFT=$((DRIFT + PE_DRIFT))
+
 # ── 10. State backup (local tarball of host config + data) ─────────────
 echo
 echo "[state_backup]"
