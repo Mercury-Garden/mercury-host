@@ -17,6 +17,24 @@ node_managers:
       - 24.16.0   # stale; not in current volta cache
       - 24.18.0   # stale; not in current volta cache
     globally_pinned_packages:
+      - name: "@colbymchenry/codegraph"
+        version: 1.2.0
+        node: 24.18.0
+      - name: "@fission-ai/openspec"
+        version: 1.5.0
+        node: 24.18.0
+      - name: "@plannotator/opencode"
+        version: 0.21.4
+        node: 24.18.0
+      - name: context-mode
+        version: 1.0.169
+        node: 24.18.0
+      - name: opencode-ai
+        version: 1.17.13
+        node: 24.18.0
+      - name: pnpm
+        version: 11.9.0
+        node: 24.18.0
 
   hermes_bundled:
     home: ~/.hermes/node
@@ -31,18 +49,18 @@ system_node:
   note: "No system node. All node access goes through volta (general) or hermes/node (gateway)."
 
 path_order_required:
-  # Exact order from interactive `zsh -i -c 'echo $PATH'` on mercury as of 2026-06-27.
-  # ~/.zshrc prepends in this order: OPENFANG bin, volta, then PNPM_HOME (last prepend wins).
-  # Result: pnpm/bin ends up first, volta/bin second, hermes paths much later.
-  - ~/.local/share/pnpm/bin
+  # Exact order from interactive `zsh -i -c 'echo $PATH'` on mercury as of 2026-07-02.
+  # .zshenv (sourced before .zshrc) prepends $VOLTA_HOME/bin, so volta ends up
+  # first regardless of the .zshrc pnpm prepend. .zshrc then prepends in this
+  # order: .mercury/bin, volta, pnpm/bin (deduped — see template).
+  # Result: volta/bin ends up first; pnpm/bin is later in the chain.
   - ~/.volta/bin
   - ~/.local/bin
   - ~/data/.mercury/bin
-  - ~/.volta/bin
+  - ~/.local/share/pnpm/bin
   - ~/.hermes/hermes-agent/venv/bin
   - ~/.hermes/hermes-agent/node_modules/.bin
   - ~/.hermes/node/bin
-  - ~/.local/bin
   - ~/.cargo/bin
   - /usr/local/sbin
   - /usr/local/bin
