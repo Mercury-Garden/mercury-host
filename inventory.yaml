@@ -77,24 +77,6 @@ services:
     repo: local
     managed_by: human+mercutio
 
-  - id: webhook-server
-    kind: systemd-user
-    unit: systemd/user/webhook-server.service
-    binds:
-      - 127.0.0.1:3940
-    nginx_vhost: webhook.mercury.garden
-    description: "GitHub webhook listener + auto-merge for OpenSpec arcs"
-    repo: Mercury-Garden/webhook-server
-    managed_by: human+mercutio
-
-  - id: discord-notify
-    kind: systemd-user
-    unit: systemd/user/discord-notify.service
-    binds: []
-    description: "Push notifications from cron jobs to Discord"
-    repo: local
-    managed_by: human+mercutio
-
   - id: obscura-mcp
     kind: systemd-user
     unit: systemd/user/obscura-mcp.service
@@ -157,9 +139,6 @@ cron:
       - id: 59b7302d21b7
         name: x-digest-daily
         schedule: "0 14 * * 1-5"
-      - id: e7239d6f904e
-        name: auto-arc-advance
-        schedule: "every 1m"
       - id: b5586aeda0f3
         name: better-bet-knockout-daily-update
         schedule: "30 12 * * *"
