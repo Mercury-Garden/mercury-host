@@ -253,6 +253,38 @@ node_managers:
     pnpm: null
     purpose: "Hermes gateway runtime; not user-managed"
 
+# ── Web search backends (Hermes web_search / web_extract) ───────────────
+# Hermes enforces a strict split: backend CHOICE lives in
+# ~/.hermes/config.yaml (or per-profile ~/.hermes/profiles/<name>/config.yaml),
+# the API KEYS live in ~/.hermes/.env (or per-profile .env files).
+# The 8 shipped plugins live under ~/.hermes/hermes-agent/plugins/web/.
+# See skills/devops/web-search-backends/SKILL.md for the full picture.
+# Only one backend can be active at a time per capability; no auto-rotation.
+web_search:
+  backend: tavily          # matches ~/.hermes/config.yaml web.backend
+  search_backend: tavily
+  extract_backend: tavily
+  free_tier_rotation:
+    - tavily              # 1k calls/mo, primary
+    - brave-free          # 2k calls/mo, when tavily exhausts (no extract — pair with firecrawl)
+    - ddgs                # no key needed, last-resort search only
+  keys_present_in_default_profile:
+    - TAVILY_API_KEY
+    - FIRECRAWL_API_KEY
+    - EXA_API_KEY
+    - PARALLEL_API_KEY
+  keys_present_in_mercury_butler_profile:
+    - TAVILY_API_KEY
+    - FIRECRAWL_API_KEY
+    - EXA_API_KEY
+    - PARALLEL_API_KEY
+  note: |
+    backup-secrets.sh already captures both hermes_env and
+    hermes_profile_mercury-butler_env as b64 blocks; the audit only
+    checks presence of the 4 keys, not their values. mercury-butler
+    profile's config.yaml currently has web.* = "" (keys available,
+    backend not yet activated there).
+
 projects_root: ~/data/code
 
 projects:
