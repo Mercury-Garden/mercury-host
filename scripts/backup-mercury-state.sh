@@ -72,6 +72,17 @@ BACKUP_PATHS=(
     /etc/systemd/user
     /etc/nginx
     /etc/letsencrypt
+    # ── Per-project .env files (added 2026-07-03 after .env drop incident) ──
+    # These are gitignored by every project (`.env` in .gitignore) so a git
+    # pull can never recover them. backup-secrets.sh is the PRIMARY backup
+    # (captured as b64 blocks in ~/.secrets/secrets.yaml); these entries are
+    # a SECOND layer — daily tarball with mode 0600 preserved.
+    #
+    # Keep in sync with backup-secrets.sh SC_ENV/XD_ENV paths AND with
+    # secrets/inventory.yaml pointer entries AND with audit.sh PROJECT_ENVS.
+    /home/ubuntu/data/code/x-digest/.env
+    /home/ubuntu/data/code/scriptcaster/.env
+    /home/ubuntu/.config/openchamber/startup.env
 )
 
 # ----- 2. exclude list -----
