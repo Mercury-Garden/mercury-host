@@ -146,7 +146,7 @@ PYEOF
 # expect them to be in our tracked unit files.
 echo
 echo "[systemd-user]"
-for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber webhook-server discord-notify obscura-mcp session-migration; do
+for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber obscura-mcp session-migration; do
   if systemctl --user is-enabled "$svc" >/dev/null 2>&1; then
     ok "$svc enabled (user)"
   else
