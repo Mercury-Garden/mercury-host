@@ -422,6 +422,67 @@ for rel in "${!HPS_PROFILE_FILES[@]}"; do
 done
 DRIFT=$((DRIFT + HPS_DRIFT))
 
+# ── 9d. User cache paths relocated to /dev/sdb (2026-07-05) ───────────
+# Drift here means /home/ubuntu's cache dirs are back on the boot
+# volume — the very thing this PR was created to prevent. Each entry
+# is the same shape as [project_env] / [hermes_profile_state]: a
+# hardcoded bash map below that mirrors inventory.yaml → user_cache_paths.
+# Detect on the very first audit run, not "when the boot disk fills
+# up again".
+#
+# Checks per entry (src → declared target):
+#   1. src is a symlink (not a real dir)
+#   2. readlink -f resolves to declared target
+#   3. target exists and is a directory
+#   4. target lives on /dev/sdb (df --output=source on the target
+#      differs from df --output=source on /home/ubuntu/)
+echo
+echo "[user_cache_paths]"
+UCP_DRIFT=0
+# Hardcoded so missing entries are detected on first audit run.
+# Twin source of truth with inventory.yaml → user_cache_paths[].symlink/target.
+declare -A UCP_SYMLINKS=(
+  ["$HOME/.cache"]="/home/ubuntu/data/.cache"
+  ["$HOME/.local/share"]="/home/ubuntu/data/.local/share"
+)
+for src in "${!UCP_SYMLINKS[@]}"; do
+  dst="${UCP_SYMLINKS[$src]}"
+  short_src="${src#"$HOME"}"       # ~/.cache    (display)
+  short_dst="${dst#"$HOME"}"       # ~/data/...   (display)
+  if [ ! -L "$src" ]; then
+    drift "$short_src is NOT a symlink — cache has been moved back to /dev/sda!"
+    UCP_DRIFT=$((UCP_DRIFT + 1))
+    continue
+  fi
+  actual_target=$(readlink "$src")
+  resolved=$(readlink -f "$src")
+  if [ "$resolved" != "$dst" ]; then
+    drift "$short_src -> $actual_target (resolves to $resolved, expected $short_dst)"
+    UCP_DRIFT=$((UCP_DRIFT + 1))
+    continue
+  fi
+  if [ ! -d "$dst" ]; then
+    drift "$short_src target $short_dst does not exist on disk!"
+    UCP_DRIFT=$((UCP_DRIFT + 1))
+    continue
+  fi
+  # Verify the target sits on /dev/sdb (not sda). Uses df --output=source
+  # which gives the device for the resolved mountpoint (sdb1 in our case).
+  dst_dev=$(df --output=source "$dst" 2>/dev/null | tail -1 | tr -d ' ')
+  home_dev=$(df --output=source /home/ubuntu 2>/dev/null | tail -1 | tr -d ' ')
+  if [ -z "$dst_dev" ] || [ -z "$home_dev" ]; then
+    note "$short_src -> $short_dst (could not verify filesystem; both df calls failed)"
+    continue
+  fi
+  if [ "$dst_dev" = "$home_dev" ]; then
+    drift "$short_src target $short_dst is on $dst_dev — SAME device as /home, NOT relocated to sdb!"
+    UCP_DRIFT=$((UCP_DRIFT + 1))
+  else
+    ok "$short_src -> $short_dst (on $dst_dev ✓; home on $home_dev)"
+  fi
+done
+DRIFT=$((DRIFT + UCP_DRIFT))
+
 # ── 10. State backup (local tarball of host config + data) ─────────────
 echo
 echo "[state_backup]"

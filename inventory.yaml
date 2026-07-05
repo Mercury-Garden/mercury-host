@@ -314,6 +314,70 @@ hermes_profiles_irreplaceable:
         mode: 600
         backup_covered_by: backup-secrets.sh (hermes_profile_mercury-butler_env block)
 
+# ── User cache directories relocated to /dev/sdb (2026-07-05) ─────────
+# ~/.cache (~3.5G) and ~/.local/share (~1.4G) were relocated from the
+# boot volume (sda) to /home/ubuntu/data on /dev/sdb to stop the boot
+# disk from filling up. Cache VALUE is preserved — every tool (pnpm,
+# uv, playwright, opencode, huggingface, ms-playwright, etc.) resolves
+# the same data via the symlink. After the move, future cache growth
+# lands on /dev/sdb (41G free at last check) instead of /dev/sda (3.9G
+# free at the time).
+#
+# Invariants the audit enforces:
+#  1. The source path is a symlink (not a real directory).
+#  2. The symlink resolves to the declared target.
+#  3. The target exists and is a directory.
+#  4. The target lives on /dev/sdb1, not /dev/sda1.
+#
+# Restore.sh creates the target dirs on a fresh host before symlinking
+# so it survives the first-boot no-data-volume case (see scripts/restore.sh).
+# backup-mercury-state.sh EXCLUDES these symlinks — the cache data is
+# rebuildable from registry/cache sources and is intentionally not
+# captured in the daily tarball (also already documented in the script).
+user_cache_paths:
+  - symlink: /home/ubuntu/.cache
+    target: /home/ubuntu/data/.cache
+    kind: symlink-dir
+    relocated_at: "2026-07-05"
+    moved_size_mb: 3500
+    moved_contents:
+      - ms-playwright         # 961M — chromium + ffmpeg
+      - opencode             # 1.5G — session indexes + models
+      - uv                   # 526M — Python wheels archive
+      - huggingface          # 464M — STT/TTS model files
+      - pnpm                 # 342M — pnpm cache
+      - node-gyp             # 194M — node native compile cache
+      - electron             # chromium-style cache
+      - pip                  # python pip cache
+      - typescript           # 16M — TS Language Server
+      - node                 # 100M — npm cache
+      - fonts/fontconfig     # fontconfig cache
+      - devtools-upgrade     # cargo + rustup cache
+      - gh                   # gh CLI cache
+      - starship             # shell prompt cache
+    rebuilt_by: |
+      Each cache entry is rebuildable from its source registry on first
+      use; loss of the cache is not catastrophic. e.g. pnpm cache
+      rebuilds on next install; playwright cache rebuilds on first
+      `playwright install`; uv cache rebuilds on next `uv pip install`.
+    backup_covered_by: null   # caches are EXCLUDED from backup-mercury-state.sh
+  - symlink: /home/ubuntu/.local/share
+    target: /home/ubuntu/data/.local/share
+    kind: symlink-dir
+    relocated_at: "2026-07-05"
+    moved_size_mb: 1360
+    moved_contents:
+      - pnpm                 # 639M — pnpm store (hardlinked phantom-symlink content-addressed)
+      - opencode             # 592M — opencode session + settings
+      - uv                   # 99M  — uv cache (also at .cache/uv; this is metadata)
+      - goose                # 30M  — goose AI assistant cache
+      - opentui, tirith, rtk # misc agent tooling caches
+    rebuilt_by: |
+      pnpm store rebuilds on `pnpm install`; opencode session rebuilds
+      from /home/ubuntu/data/code/<project>/.git or live data; goose +
+      opentui caches rebuild on first use.
+    backup_covered_by: null   # caches are EXCLUDED from backup-mercury-state.sh
+
 projects_root: ~/data/code
 
 projects:
