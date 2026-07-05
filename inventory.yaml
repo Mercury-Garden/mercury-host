@@ -44,9 +44,13 @@ services:
     kind: systemd-system
     unit: systemd/system/hermes-dashboard.service
     binds: []
-    description: "Hermes dashboard (system-level)"
+    description: "Hermes dashboard (system-level). Custom local override — ExecStart runs the hermes-agent venv's `hermes_cli.main dashboard`."
     repo: "local install via Hermes installer"
     managed_by: human+mercutio
+    note: |
+      Source-controlled in mercury-host (this repo) — symlinked from
+      /etc/systemd/system/hermes-dashboard.service. Not an apt package; the
+      previous /lib/systemd/system/... path in inventory was a stale comment.
 
   - id: mercury-tasks
     kind: systemd-user
@@ -71,9 +75,9 @@ services:
     kind: systemd-user
     unit: systemd/user/openchamber.service
     binds:
-      - 127.0.0.1:3939
+      - 127.0.0.1:9090
     nginx_vhost: chamber.mercury.garden
-    description: "chamber.mercury.garden SPA backend"
+    description: "chamber.mercury.garden SPA backend (was :3939, migrated to :9090 — nginx upstream updated to match)"
     repo: local
     managed_by: human+mercutio
 
@@ -117,10 +121,15 @@ services:
 
   - id: ollama
     kind: systemd-system
-    unit: /lib/systemd/system/ollama.service   # apt package, do not own
+    unit: systemd/system/ollama.service
     binds:
       - 127.0.0.1:11434
-    description: "Local LLM runtime (used by agents as a fallback provider)"
+    description: "Local LLM runtime (fallback provider). Mercury-hardened custom override (LimitNOFILE=102400, ProtectSystem=full, NoNewPrivileges=true)."
+    note: |
+      Source-controlled in mercury-host (this repo) — symlinked from
+      /etc/systemd/system/ollama.service. The binary at /usr/local/bin/ollama
+      is installed via the official ollama install script (NOT apt), so this
+      unit is not provided by any package and we fully own it.
 
   - id: cron
     kind: systemd-system
@@ -193,13 +202,13 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-02T08-00-25Z"
-  last_size_mb: 500
-  last_file_count: 24242
-  last_sha256: "712064846451b2bea1165e9709e3c9c10f49da015c8f4732610c3df8a62656f7"
+  last_run_at: "2026-07-05T08-00-07Z"
+  last_size_mb: 656
+  last_file_count: 26905
+  last_sha256: "09042122e1621a850160725432dc3311abd246d411592122a97dc44e5b2294d7"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-07-02T08-01-16Z"
-  tarballs_on_disk: 3
+  last_verify_at: "2026-07-05T08-01-28Z"
+  tarballs_on_disk: 6
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via
     # `oci bv volume-backup-policy assign` from a laptop with OCI CLI; runs
@@ -271,6 +280,40 @@ web_search:
     profile's config.yaml currently has web.* = "" (keys available,
     backend not yet activated there).
 
+# ── Hermes per-profile irreplaceable paths ────────────────────────────────
+# Files under ~/.hermes/profiles/<name>/ that are critical to recover the
+# profile's identity and runtime state. The whole `~/.hermes` directory is
+# already captured by `backup-mercury-state.sh` (the daily state tarball),
+# but inventory.yaml does not enumerate these by name — meaning a fresh
+# host restored from the state tarball has no verification surface for
+# "is the mercury-butler profile intact?". This block enumerates the
+# critical files so audit.sh can sanity-check presence + mode 0600 on
+# every profile, mirroring the project_env check.
+# To add a new profile, add a block here with the same shape; capture.sh
+# reads from this and emits per-file ok/drift lines into the audit.
+hermes_profiles_irreplaceable:
+  - profile: mercury-butler
+    home: ~/.hermes/profiles/mercury-butler
+    files:
+      - path: state.db                 # full session history
+        mode: 600
+        backup_covered_by: backup-mercury-state.sh (full ~/.hermes tarball)
+      - path: SOUL.md                  # agent system prompt
+        mode: 600
+        backup_covered_by: backup-mercury-state.sh
+      - path: auth.json                # per-profile provider API keys
+        mode: 600
+        backup_covered_by: backup-secrets.sh (hermes_profile_mercury-butler_env block) + backup-mercury-state.sh
+      - path: channel_directory.json   # Discord channel / thread routing
+        mode: 600
+        backup_covered_by: backup-mercury-state.sh
+      - path: config.yaml              # per-profile runtime config
+        mode: 600
+        backup_covered_by: backup-mercury-state.sh
+      - path: .env                     # per-profile secrets
+        mode: 600
+        backup_covered_by: backup-secrets.sh (hermes_profile_mercury-butler_env block)
+
 projects_root: ~/data/code
 
 projects:
@@ -297,7 +340,7 @@ projects:
     package_manager: pnpm@11.9.0
     pinned_node: 24.18.0
     expected_branch: main
-    lockfile_sha256: ef187c911bcc    # capture.sh: refreshed scriptcaster
+    lockfile_sha256: a5904bd36258    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
     volta_pinned: true
 

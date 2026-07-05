@@ -20,9 +20,15 @@
 #   x-digest-env                  ~/data/code/x-digest/.env
 #   openchamber-startup-env       /home/ubuntu/.config/openchamber/startup.env
 #   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
-#   discord-notify                ~/.config/discord-notify/config.yaml  (added 2026-06-30)
 #   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
-#   webhook-server                ~/.config/webhook-server/secret.txt + projects.yaml  (added 2026-06-30)
+#
+# Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
+# but their secrets.yaml blocks lingered; nothing reads these anymore:
+#   discord-notify                ~/.config/discord-notify/config.yaml
+#   webhook-server                ~/.config/webhook-server/secret.txt + projects.yaml
+# (The on-disk .config dirs were deleted in the same PR. If a future
+# fork needs the configs, the latest state tarball has the .config dir
+# for cold-recovery.)
 #
 # Skipped on purpose:
 #   ~/.hermes/auth.json           — only contains secret_fingerprints (sha256 of
@@ -194,10 +200,8 @@ PRIVKEY_REAL="$(readlink -f "$PRIVKEY_LINK" 2>/dev/null || echo "$PRIVKEY_LINK")
 #    missing from the original 12-source list). Each one is a host-restorable
 #    secret needed to fully recreate the operational state.
 OPENCODE_AUTH="${HOME}/.local/share/opencode/auth.json"
-DISCORD_NOTIFY_CFG="${HOME}/.config/discord-notify/config.yaml"
 GOGCLI_CREDENTIALS="${HOME}/.config/gogcli/credentials.json"
 GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
-WEBHOOK_SERVER_DIR="${HOME}/.config/webhook-server"
 
 # Build the YAML
 {
@@ -301,19 +305,17 @@ WEBHOOK_SERVER_DIR="${HOME}/.config/webhook-server"
   echo "# ── opencode auth (provider API keys) ───────────────────────────"
   emit_b64_block "opencode_auth" "$OPENCODE_AUTH" || miss "$HOME/.local/share/opencode/auth.json"
   echo
-  echo "# ── discord-notify (per-project HMAC + chat IDs) ───────────────"
-  emit_b64_block "discord_notify_config" "$DISCORD_NOTIFY_CFG" || miss "$HOME/.config/discord-notify/config.yaml"
-  echo
   echo "# ── gogcli (Gmail OAuth client creds + encrypted keyring) ───────"
   emit_b64_block "gogcli_credentials" "$GOGCLI_CREDENTIALS" || miss "$HOME/.config/gogcli/credentials.json"
   # The keyring is a directory of 3 encrypted blobs; pack as tar.gz + b64.
   # Restoring requires GOG_KEYRING_PASSWORD from hermes .env to decrypt.
   pack_dir_b64_block "gogcli_keyring_tar_gz" "$GOGCLI_KEYRING_DIR" || miss "$HOME/.config/gogcli/keyring"
   echo
-  echo "# ── webhook-server (HMAC signing key + per-project secrets) ────"
-  emit_b64_block "webhook_server_secret" "$WEBHOOK_SERVER_DIR/secret.txt" || miss "$HOME/.config/webhook-server/secret.txt"
-  emit_b64_block "webhook_server_projects" "$WEBHOOK_SERVER_DIR/projects.yaml" || miss "$HOME/.config/webhook-server/projects.yaml"
-  echo
+  # discord-notify + webhook-server removed 2026-07-05 (PR #28). The systemd
+  # units and projects were decommissioned in PR #24 but their config dirs
+  # + secrets.yaml capture remained; nothing reads them anymore. If a future
+  # fork needs the configs, the latest state tarball still has the .config
+  # directory for cold-recovery.
 } > "$DEST"
 
 # Restrict perms before any other command can see it.

@@ -386,6 +386,42 @@ for entry in "${PROJECT_ENVS[@]}"; do
 done
 DRIFT=$((DRIFT + PE_DRIFT))
 
+# ── 9c. Hermes per-profile irreplaceable paths (state.db, SOUL.md, etc.) ─
+# Mirrors the project_env pattern but for `~/.hermes/profiles/<name>/`.
+# Drift here means a fresh-host restore from the state tarball would land
+# with an incomplete profile — fail loud so the user notices BEFORE the
+# profile is needed in production. Hardcoded list (kept in lockstep with
+# `hermes_profiles_irreplaceable` in inventory.yaml) so a missing profile
+# file is detected on the very first audit run, not "when we try to use it".
+echo
+echo "[hermes_profile_state]"
+HPS_DRIFT=0
+declare -A HPS_PROFILE_FILES=(
+  ["mercury-butler/state.db"]="600"
+  ["mercury-butler/SOUL.md"]="600"
+  ["mercury-butler/auth.json"]="600"
+  ["mercury-butler/channel_directory.json"]="600"
+  ["mercury-butler/config.yaml"]="600"
+  ["mercury-butler/.env"]="600"
+)
+for rel in "${!HPS_PROFILE_FILES[@]}"; do
+  full="$HOME/.hermes/profiles/$rel"
+  want="${HPS_PROFILE_FILES[$rel]}"
+  if [ -f "$full" ]; then
+    actual=$(stat -c '%a' "$full")
+    if [ "$actual" = "$want" ]; then
+      echo "  ✓ $rel: present, mode $actual"
+    else
+      echo "  ✗ DRIFT: $rel: mode $actual (want $want) at $full"
+      HPS_DRIFT=$((HPS_DRIFT + 1))
+    fi
+  else
+    echo "  ✗ DRIFT: $rel: MISSING at $full — profile is unrecoverable"
+    HPS_DRIFT=$((HPS_DRIFT + 1))
+  fi
+done
+DRIFT=$((DRIFT + HPS_DRIFT))
+
 # ── 10. State backup (local tarball of host config + data) ─────────────
 echo
 echo "[state_backup]"

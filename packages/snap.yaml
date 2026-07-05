@@ -26,7 +26,7 @@ apps:
 
   - name: cups
     version: 2.4.19-2
-    revision: "1222"
+    revision: "1226"
     channel: latest/stable
     publisher: openprinting**
     classic: false
