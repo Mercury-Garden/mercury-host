@@ -55,6 +55,44 @@ if [ -d "$HOME/data/code" ]; then
   done
 fi
 
+# ── 4.5. User cache symlinks (post-2026-07-05 cache relocation) ──────
+# ~/.cache and ~/.local/share are now symlinks pointing at
+# /home/ubuntu/data/.cache and /home/ubuntu/data/.local/share. On a
+# fresh host, both the sdb data volume AND the target dirs must exist
+# before symlinking — otherwise the symlinks dangle and every tool
+# (pnpm, uv, playwright, hermes-gateway mmap loads) breaks.
+#
+# This step is intentionally BEFORE [systemd] so that when the user
+# services come up, the cache symlinks already resolve to real dirs.
+# Inventory source of truth: inventory.yaml → user_cache_paths.
+echo "[user_cache] creating cache symlinks on sdb"
+DATA_VOL="/home/ubuntu/data"
+if [ -d "$DATA_VOL" ]; then
+  mkdir -p "$DATA_VOL/.cache" "$DATA_VOL/.local/share"
+  for entry in "$HOME/.cache:$DATA_VOL/.cache" \
+               "$HOME/.local/share:$DATA_VOL/.local/share"; do
+    src="${entry%%:*}"
+    dst="${entry##*:}"
+    if [ -L "$src" ]; then
+      echo "  $src already a symlink (skip)"
+      continue
+    fi
+    if [ -d "$src" ] && [ ! -L "$src" ]; then
+      echo "  WARN: $src is a real directory on the boot volume"
+      echo "        this fresh host does not match inventory.yaml → user_cache_paths"
+      echo "        (you may want to migrate it before continuing; see references)"
+    fi
+    ln -s "$dst" "$src"
+    echo "  $src -> $dst"
+  done
+else
+  echo "  WARN: $DATA_VOL not present — cache symlinks not created"
+  echo "        mount the data volume, create $DATA_VOL, then run:"
+  echo "        mkdir -p $DATA_VOL/.cache $DATA_VOL/.local/share"
+  echo "        ln -s $DATA_VOL/.cache $HOME/.cache"
+  echo "        ln -s $DATA_VOL/.local/share $HOME/.local/share"
+fi
+
 # ── 5. systemd user services enabled ─────────────────────────────────────
 echo "[systemd] enabling user services"
 mkdir -p "$HOME/.config/systemd/user/"

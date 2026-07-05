@@ -133,6 +133,20 @@ catches most issues before push.
   `hermes.mercury.garden` is in `sites-available` but not symlinked
   into `sites-enabled`. Audit handles this — don't remove it from
   inventory until the file is gone from `sites-available/`.
+- **`user_cache_paths:` in `inventory.yaml`** declares that
+  `~/.cache` and `~/.local/share` are symlinks pointing at
+  `/home/ubuntu/data/.cache` and `/home/ubuntu/data/.local/share`
+  (added 2026-07-05 after the boot-disk fill-up intervention).
+  These are RELOCATED, not aliased — every tool (pnpm, uv,
+  playwright, opencode, hermes-gateway) resolves the same cache
+  data transparently via the symlink. The audit's `[user_cache_paths]`
+  section enforces four invariants (symlink, target correct, target
+  exists, target on sdb — not sda). On a fresh host, `restore.sh`
+  step 4.5 creates the target dirs on sdb before symlinking. Cache
+  data is intentionally NOT backed up by `backup-mercury-state.sh`
+  (rebuildable from registries); see the script's excludes list.
+  Symlinks to other parts of `/home/ubuntu/data` should follow the
+  same shape (declare in `user_cache_paths`, audit verifies).
 - **Tooling skills live in three different roots** (claude / agents /
   opencode) — `tooling/skills-manifest.yaml` tracks name + sha256 only,
   not contents. To add a skill, install it under `~/.config/opencode/skills/`

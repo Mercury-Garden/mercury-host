@@ -110,6 +110,21 @@ EXCLUDES=(
     --exclude='.local/share/Trash'
     --exclude='.volta'
     --exclude='.secrets/secrets.yaml'
+    # ── User cache relocation (2026-07-05) ──────────────────────────────
+    # ~/.cache and ~/.local/share are now symlinks pointing at
+    # /home/ubuntu/data/.cache and /home/ubuntu/data/.local/share.
+    # Without these excludes, tar would either:
+    #   (a) follow the symlink and try to archive the (large, sensible)
+    #       sdb cache content, doubling daily backup size for no DR
+    #       benefit (cache is rebuildable from registries), OR
+    #   (b) with --one-file-system (which we use), archive the symlink
+    #       record itself (4 bytes) which is harmless but confusing
+    #       on restore.
+    # Either way: skip the symlinks. Cache data is intentionally not
+    # backed up. See inventory.yaml → user_cache_paths for the full
+    # inventory of what this excludes.
+    --exclude='/home/ubuntu/.cache'
+    --exclude='/home/ubuntu/.local/share'
 )
 
 # ----- 3. check inputs -----
