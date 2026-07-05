@@ -20,8 +20,12 @@
 #   x-digest     ~/data/code/x-digest/.env
 #   openchamber  ~/.config/openchamber/startup.env
 #   opencode    ~/.local/share/opencode/auth.json
-#   discord-notify  ~/.config/discord-notify/config.yaml
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
+#
+# Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
+# but restore logic lingered. If a future fork needs the configs, the
+# latest state tarball has the .config dir for cold-recovery:
+#   discord-notify  ~/.config/discord-notify/config.yaml
 #   webhook-server  ~/.config/webhook-server/secret.txt + projects.yaml
 #
 # Per-profile note: `hermes-profile-<name>` kinds are NOT enumerated
@@ -270,16 +274,9 @@ PYEOF
   if in_include opencode; then
     echo "  opencode:   ~/.local/share/opencode/auth.json  (mode 0600)"
   fi
-  if in_include discord-notify; then
-    echo "  discord-notify: ~/.config/discord-notify/config.yaml  (mode 0600)"
-  fi
   if in_include gogcli; then
     echo "  gogcli:     ~/.config/gogcli/credentials.json  (mode 0600)"
     echo "              ~/.config/gogcli/keyring/          (3 encrypted blobs, tar.gz)"
-  fi
-  if in_include webhook-server; then
-    echo "  webhook-server: ~/.config/webhook-server/secret.txt  (mode 0600)"
-    echo "                  ~/.config/webhook-server/projects.yaml  (mode 0600)"
   fi
   echo
   exit 0
@@ -539,18 +536,6 @@ if in_include opencode; then
   fi
 fi
 
-# ── discord-notify ──────────────────────────────────────────────────────
-if in_include discord-notify; then
-  note "restoring discord-notify config..."
-  DN_DIR="${HOME}/.config/discord-notify"
-  mkdir -p "$DN_DIR"
-  if decode_b64_block "discord_notify_config" "$DN_DIR/config.yaml" 0600; then
-    ok "discord_notify_config"
-  else
-    warn "discord_notify_config: SKIPPED (null in source)"
-  fi
-fi
-
 # ── gogcli (credentials + encrypted keyring) ────────────────────────────
 # Restoring the keyring requires GOG_KEYRING_PASSWORD (in hermes .env) to
 # decrypt the 3 blobs. The password itself is in the hermes block above.
@@ -570,27 +555,13 @@ if in_include gogcli; then
   fi
 fi
 
-# ── webhook-server ──────────────────────────────────────────────────────
-if in_include webhook-server; then
-  note "restoring webhook-server config..."
-  WS_DIR="${HOME}/.config/webhook-server"
-  mkdir -p "$WS_DIR"
-  if decode_b64_block "webhook_server_secret" "$WS_DIR/secret.txt" 0600; then
-    ok "webhook_server_secret"
-  else
-    warn "webhook_server_secret: SKIPPED (null in source)"
-  fi
-  if decode_b64_block "webhook_server_projects" "$WS_DIR/projects.yaml" 0600; then
-    ok "webhook_server_projects"
-  else
-    warn "webhook_server_projects: SKIPPED (null in source)"
-  fi
-fi
+# discord-notify + webhook-server restore blocks removed 2026-07-05 (PR #28)
+# — services were decommissioned in PR #24; see header comment.
 
 echo
 echo "=== summary ==="
 ok "restore complete"
 note "restart services to pick up new secrets:"
 note "  sudo systemctl restart nginx"
-note "  systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy webhook-server openchamber"
+note "  systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy openchamber"
 note "  systemctl --user restart hermes-cron  # if you have cron-driven tasks"

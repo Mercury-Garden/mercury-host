@@ -1,0 +1,22 @@
+[Unit]
+Description=Ollama LLM Serving
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu
+ExecStart=/usr/local/bin/ollama serve
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=102400
+Environment=OLLAMA_LOG_LEVEL=info
+Environment=OLLAMA_HOST=0.0.0.0:11434
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
