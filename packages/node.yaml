@@ -49,15 +49,23 @@ system_node:
   note: "No system node. All node access goes through volta (general) or hermes/node (gateway)."
 
 path_order_required:
-  # Exact order from interactive `zsh -i -c 'echo $PATH'` on mercury as of 2026-07-02.
-  # .zshenv (sourced before .zshrc) prepends $VOLTA_HOME/bin, so volta ends up
-  # first regardless of the .zshrc pnpm prepend. .zshrc then prepends in this
-  # order: .mercury/bin, volta, pnpm/bin (deduped — see template).
-  # Result: volta/bin ends up first; pnpm/bin is later in the chain.
+  # Actual order from interactive `zsh -i -c 'echo $PATH'` on mercury as
+  # of 2026-07-07 (verified after the audit surfaced this drift).
+  # .zshenv (sourced before .zshrc) prepends $VOLTA_HOME/bin and .local/bin.
+  # .zshrc line ~108 prepends $HOME/data/.mercury/bin.
+  # .zshrc line ~115 prepends $PNPM_HOME/bin (intentional — most-recently
+  #   installed pnpm wins, and pnpm's bin dir needs to shadow volta's pnpm
+  #   shim so version-pinned pnpm from package.json is preferred).
+  # Note: pnpm-store prepending is BY DESIGN — without it, the global
+  #   volta pnpm (11.10.0) would shadow the project-pinned pnpm (11.9.0)
+  #   and break the lockfile_sha256 reproducibility check in audit.sh.
+  # After dedup: pnpm-store, volta, .local/bin, .mercury/bin, hermes-venv.
+  # Verified 2026-07-07: the audit was correctly catching drift between
+  # this inventory and the actual ~/.zshrc; the inventory was the liar.
+  - ~/.local/share/pnpm/bin
   - ~/.volta/bin
   - ~/.local/bin
   - ~/data/.mercury/bin
-  - ~/.local/share/pnpm/bin
   - ~/.hermes/hermes-agent/venv/bin
   - ~/.hermes/hermes-agent/node_modules/.bin
   - ~/.hermes/node/bin
