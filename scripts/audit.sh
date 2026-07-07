@@ -356,19 +356,21 @@ DRIFT=$((DRIFT + CRON_DRIFT))
 # Drift on this section catches the recurring incident: an agent (or a manual
 # cleanup) drops /home/ubuntu/data/code/<repo>/.env and the cron for that repo
 # fails silently the next morning. The fix surfaces immediately.
+#
+# As of 2026-07-07 the list is auto-discovered from ~/data/code/ (every `.env*`
+# file, excluding `*.example` / `*.sample` templates) — adding a new project
+# with a .env needs no audit.sh edit. Files under ~/.config/ that are
+# project-scoped (mercury-tasks tokens, openchamber startup.env) are checked
+# in the static list below because they don't live under ~/data/code/.
 echo
 echo "[project_env]"
-# Each line is "label:path". Keep this list in sync with backup-secrets.sh
-# (where the same paths are captured as b64 blocks) and secrets/inventory.yaml
-# (pointer entries).
-PROJECT_ENVS=(
-  "x-digest:${HOME}/data/code/x-digest/.env"
-  "scriptcaster:${HOME}/data/code/scriptcaster/.env"
+# Static checks for ~/.config/ project-scoped secrets.
+PE_DRIFT=0
+STATIC_PROJECT_ENVS=(
   "mercury-tasks:${HOME}/.config/mercury-tasks/tokens.json"
   "openchamber:${HOME}/.config/openchamber/startup.env"
 )
-PE_DRIFT=0
-for entry in "${PROJECT_ENVS[@]}"; do
+for entry in "${STATIC_PROJECT_ENVS[@]}"; do
   label="${entry%%:*}"
   path="${entry#*:}"
   if [ -f "$path" ]; then
@@ -384,6 +386,39 @@ for entry in "${PROJECT_ENVS[@]}"; do
     PE_DRIFT=$((PE_DRIFT + 1))
   fi
 done
+# Auto-discovered checks for every `.env*` file under ~/data/code/.
+# `~/data/code` may not exist on a fresh CI runner — that's expected,
+# the static checks above still cover the .config/ project secrets.
+CODE_ROOT="${BACKUP_CODE_ROOT:-${HOME}/data/code}"
+if [ -d "$CODE_ROOT" ]; then
+  # mapfile handles paths with spaces/newlines safely.
+  mapfile -d '' -t CODE_ENV_FILES < <(
+    find "$CODE_ROOT" \
+      -type f \
+      -name '.env*' \
+      ! -name '*.example' \
+      ! -name '*.sample' \
+      -print0 2>/dev/null \
+      | sort -z
+  )
+  if [ "${#CODE_ENV_FILES[@]}" -eq 0 ]; then
+    echo "  (no .env* files under $CODE_ROOT — nothing to check)"
+  else
+    for env_file in "${CODE_ENV_FILES[@]}"; do
+      [ -n "$env_file" ] || continue
+      label="$(printf '%s' "$env_file" | sed "s#^${CODE_ROOT}/##")"
+      mode=$(stat -c '%a' "$env_file")
+      if [ "$mode" = "600" ]; then
+        echo "  ✓ $label: present, mode 0600"
+      else
+        echo "  ✗ DRIFT: $label: mode $mode (want 600) at $env_file"
+        PE_DRIFT=$((PE_DRIFT + 1))
+      fi
+    done
+  fi
+else
+  echo "  ($CODE_ROOT not present — skipping auto-discovered .env checks)"
+fi
 DRIFT=$((DRIFT + PE_DRIFT))
 
 # ── 9c. Hermes per-profile irreplaceable paths (state.db, SOUL.md, etc.) ─

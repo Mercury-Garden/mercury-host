@@ -61,6 +61,8 @@ All paths are relative to repo root unless noted.
 | Preview a secrets restore | `bash scripts/restore-secrets.sh --dry-run` |
 | Restore secrets from a specific file (no service restarts) | `bash scripts/restore-secrets.sh /path/to/secrets.yaml` |
 | Restore only one subsystem | `bash scripts/restore-secrets.sh --include oauth2` |
+| Restore one specific `.env` under `~/data/code/` (per-file granularity) | `bash scripts/restore-secrets.sh --env better-bet/.env` |
+| Restore all auto-discovered `.env*` files under `~/data/code/` | `bash scripts/restore-secrets.sh --include code-env` |
 | Snapshot irreplaceable state to a daily tarball | `bash scripts/backup-mercury-state.sh` |
 | Lint all YAML | `yamllint -c .yamllint.yml --strict .` |
 | Lint all bash | `shellcheck scripts/*.sh` |
@@ -96,6 +98,20 @@ catches most issues before push.
   with sibling `manifest.json` and `verify.json`. Exit codes: 0 ok,
   1 tar failed, 2 manifest failed, 3 verify warning (non-fatal),
   4 prune warning (non-fatal).
+- **`backup-secrets.sh` auto-discovers every `.env*` file under
+  `~/data/code/`** (excludes `*.example` / `*.sample` templates) and
+  captures each as a `code_env_<sanitized-path>` b64 block in
+  `~/.secrets/secrets.yaml`. Adding a new project with a `.env` needs no
+  edit to this script, `inventory.yaml`, or the template. Use
+  `bash scripts/restore-secrets.sh --env <path-or-kind>` to restore ONE
+  file, or `--include code-env` for all. The legacy `x_digest_env` /
+  `scriptcaster_env` blocks remain as ALIASES for back-compat with old
+  `--include x-digest` / `--include scriptcaster` filters.
+- **`restore-secrets.sh --env` refuses to overwrite a non-empty target**
+  unless `--force` is passed. This protects against a typo mapping the
+  wrong kind to a working `.env` in another repo. Use `--force` only when
+  you genuinely intend to replace a working file (e.g. rolling back to
+  an older known-good backup).
 - **`restore-secrets.sh` writes files but does NOT restart services.**
   After a restore you must restart manually:
   `systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy webhook-server openchamber`

@@ -17,10 +17,28 @@
 #   letsencrypt-account-key       /etc/letsencrypt/accounts/.../account_key.json
 #   letsencrypt-privkey-mercury   /etc/letsencrypt/live/mercury.garden/privkey.pem
 #   mercury-tasks-tokens          /home/ubuntu/.config/mercury-tasks/tokens.json
-#   x-digest-env                  ~/data/code/x-digest/.env
-#   openchamber-startup-env       /home/ubuntu/.config/openchamber/startup.env
+#   x-digest-env                  ~/data/code/x-digest/.env        [alias, see code_env_* below]
+#   scriptcaster-env              ~/data/code/scriptcaster/.env    [alias, see code_env_* below]
+#   openchamber-startup-env       ~/.config/openchamber/startup.env
 #   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
 #   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
+#
+# Auto-discovered (added 2026-07-07):
+#   code_env_<sanitized-path>     EVERY `.env*` file under ~/data/code/, except
+#                                 `*.example` (templates, never have real secrets).
+#                                 Sanitization: repo-relative path → replace `/` and `.`
+#                                 with `_`, lowercase. Example:
+#                                   ~/data/code/mercury-tasks/web/.env.production
+#                                   → code_env_mercury-tasks_web_env_production
+#                                 Discovered at backup time; adding a new project
+#                                 needs no inventory edit and no script change.
+#                                 Restore one with:
+#                                   bash scripts/restore-secrets.sh --env <path>
+#                                 Restore all with:
+#                                   bash scripts/restore-secrets.sh --include code-env
+#                                 The legacy `x_digest_env` / `scriptcaster_env` keys
+#                                 remain as ALIASES of the matching code_env_* blocks
+#                                 for back-compat — old --include filters keep working.
 #
 # Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
 # but their secrets.yaml blocks lingered; nothing reads these anymore:
@@ -139,6 +157,31 @@ emit_b64_block() {
   fi
 }
 
+# ── Sanitize a filesystem path into a YAML key safe to round-trip.
+# `~/data/code/mercury-tasks/web/.env.production` →
+#   `code_env_mercury-tasks_web_env_production`
+# Rules: lowercase, `/` → `_`, leading `.` → `_`, all other `.` → `_`.
+# Strips a leading `~/data/code/` (or `$HOME/data/code/`) prefix; everything
+# else is treated as repo-relative. Hyphens, digits, and underscores pass
+# through. Non-alphanumeric chars other than `-` and `_` are dropped.
+# Returns 0 on success, 1 if the input is empty or contains no usable chars.
+sanitize_env_kind() {
+  local abs_path="$1"
+  local rel="${abs_path#"${HOME}"/data/code/}"
+  if [ "$rel" = "$abs_path" ]; then
+    # No $HOME/data/code/ prefix — fall back to basename only.
+    rel="$(basename "$abs_path")"
+  fi
+  # Lowercase, replace `/` and `.` with `_`, drop everything not [a-z0-9_-].
+  local kind
+  kind="$(printf '%s' "$rel" | tr '[:upper:]' '[:lower:]' | tr '/.' '__')"
+  kind="$(printf '%s' "$kind" | tr -cd 'a-z0-9_-')"
+  if [ -z "$kind" ]; then
+    return 1
+  fi
+  printf 'code_env_%s\n' "$kind"
+}
+
 # ── pack a directory of files into a single tar.gz, then base64 it as a
 # YAML literal block. Used for the gogcli keyring/ which has 3 binary
 # encrypted blobs that need to stay together to be useful.
@@ -188,8 +231,12 @@ XD_ENV="${HOME}/data/code/x-digest/.env"
 # Per-project .env files. These live under ~/data/code/<repo>/.env (mode 0600)
 # and are NOT in the daily BACKUP_PATHS list (those are dotfile roots, not
 # per-project) — they MUST be captured here so a dropped .env is recoverable
-# in <1 min via `bash scripts/restore-secrets.sh`. Keep this list in sync
-# with `inventory.yaml → projects[]` paths AND with `secrets/inventory.yaml`.
+# in <1 min via `bash scripts/restore-secrets.sh`. As of 2026-07-07 the list
+# is auto-discovered: every `.env*` file under ~/data/code/ is captured as a
+# `code_env_*` b64 block (excluding `*.example` templates). The two legacy
+# keys below (`x_digest_env`, `scriptcaster_env`) remain as ALIASES of the
+# corresponding auto-discovered blocks so old `--include` filters keep
+# working. No more per-project edits required when a new repo is added.
 SC_ENV="${HOME}/data/code/scriptcaster/.env"
 OC_ENV="${HOME}/.config/openchamber/startup.env"
 ACCT_KEY="$(find /etc/letsencrypt/accounts -name account_key.json 2>/dev/null | head -1 || true)"
@@ -291,13 +338,70 @@ GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
   echo "# ── mercury-tasks ───────────────────────────────────────────────"
   emit_b64_block "mercury_tasks_tokens" "$MT_TOKENS" || miss "mercury-tasks tokens"
   echo
-  echo "# ── x-digest ────────────────────────────────────────────────────"
+  # ── x-digest ────────────────────────────────────────────────────────────
+  # Back-compat alias for the auto-discovered code_env_x-digest_env block.
+  # New keys go into code_env_* (see the auto-discovered section below);
+  # this alias is preserved so legacy `--include x-digest` filters still work.
   emit_b64_block "x_digest_env" "$XD_ENV" || miss "x-digest .env"
   echo
-  echo "# ── scriptcaster ───────────────────────────────────────────────"
+  # ── scriptcaster ────────────────────────────────────────────────────────
+  # Back-compat alias for the auto-discovered code_env_scriptcaster_env block.
   # ElevenLabs / Fish Audio / Cartesia / HuggingFace / Langfuse / MiniMax keys.
-  # Captured as b64 block (key name in secrets.yaml: scriptcaster_env).
   emit_b64_block "scriptcaster_env" "$SC_ENV" || miss "scriptcaster .env"
+  echo
+  # ── Auto-discovered ~/data/code/**/*.env ────────────────────────────────
+  # Every `.env*` file under ~/data/code/ is captured as a `code_env_*` b64
+  # block, excluding `*.example` (templates never have real secrets). The
+  # path → key mapping is computed by sanitize_env_kind() above. Files
+  # already captured as x_digest_env / scriptcaster_env aliases get a
+  # re-emission as code_env_* so the new format is authoritative; the
+  # aliases above remain for back-compat. Files with mode != 0600 are
+  # captured (we don't refuse — mode is enforced on restore) but the miss
+  # note records the actual mode so the user sees it in the backup log.
+  # Override the discovery root with BACKUP_CODE_ROOT for testing.
+  CODE_ROOT="${BACKUP_CODE_ROOT:-${HOME}/data/code}"
+  echo "# ── Auto-discovered .env* under ~/data/code (excludes *.example) ──"
+  if [ -d "$CODE_ROOT" ]; then
+    # -print0 + mapfile handles paths with spaces/special chars safely.
+    mapfile -d '' -t CODE_ENV_FILES < <(
+      find "$CODE_ROOT" \
+        -type f \
+        -name '.env*' \
+        ! -name '*.example' \
+        ! -name '*.sample' \
+        -print0 2>/dev/null \
+        | sort -z
+    )
+    if [ "${#CODE_ENV_FILES[@]}" -eq 0 ]; then
+      note "no .env* files found under $CODE_ROOT"
+    else
+      for env_file in "${CODE_ENV_FILES[@]}"; do
+        [ -n "$env_file" ] || continue
+        KIND="$(sanitize_env_kind "$env_file")" || {
+          miss "sanitize failed for $env_file"
+          continue
+        }
+        if emit_b64_block "$KIND" "$env_file"; then
+          mode=$(stat -c '%a' "$env_file" 2>/dev/null || echo '?')
+          # Emit a stable source-path marker on the line immediately after the
+          # b64 block. restore-secrets.sh uses this marker (one per block,
+          # exact key name → path) to map YAML keys back to on-disk paths
+          # without depending on cosmetic section-header text. Format:
+          #   # code_env_foo_env source: /home/ubuntu/data/code/foo/.env
+          printf '# %s source: %s\n' "$KIND" "$env_file"
+          if [ "$mode" = "600" ]; then
+            ok "$KIND ($env_file, mode 0600)"
+          else
+            note "$KIND ($env_file, mode $mode — restore will normalize to 0600)"
+          fi
+        else
+          miss "$KIND ($env_file)"
+        fi
+      done
+    fi
+  else
+    note "$CODE_ROOT not present; skipping auto-discovery"
+  fi
   echo
   echo "# ── openchamber ─────────────────────────────────────────────────"
   emit_b64_block "openchamber_startup_env" "$OC_ENV" || miss "openchamber startup.env"
