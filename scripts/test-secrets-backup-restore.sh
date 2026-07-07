@@ -55,9 +55,31 @@ set -euo pipefail
 
 # ── harness config ───────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BACKUP="$REPO_ROOT/scripts/backup-secrets.sh"
-RESTORE="$REPO_ROOT/scripts/restore-secrets.sh"
+# The harness normally lives next to backup-secrets.sh and restore-secrets.sh
+# in scripts/. When it's vendored to ~/.hermes/scripts/ (as the cron
+# wrapper does), fall back to looking in the script's own directory first,
+# then in ../scripts/ relative to it.
+SIBLING_DIR="$SCRIPT_DIR"
+PARENT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+for cand in "$SIBLING_DIR" "$PARENT_DIR/scripts" "$PARENT_DIR"; do
+    if [ -x "$cand/backup-secrets.sh" ] && [ -x "$cand/restore-secrets.sh" ]; then
+        REPO_ROOT="$(cd "$cand/.." && pwd)"
+        # If REPO_ROOT/scripts == cand, that's the standard layout.
+        # If REPO_ROOT == cand (the script lives at repo root), adjust.
+        if [ -d "$REPO_ROOT/scripts" ] && [ "$cand" = "$REPO_ROOT/scripts" ]; then
+            : # standard layout — REPO_ROOT is correct
+        elif [ "$cand" = "$REPO_ROOT" ]; then
+            REPO_ROOT="$(cd "$REPO_ROOT/.." && pwd)"
+        fi
+        BACKUP="$cand/backup-secrets.sh"
+        RESTORE="$cand/restore-secrets.sh"
+        break
+    fi
+done
+if [ -z "${BACKUP:-}" ] || [ ! -x "$BACKUP" ]; then
+    echo "FATAL: backup-secrets.sh not found (searched $SIBLING_DIR, $PARENT_DIR/scripts, $PARENT_DIR)" >&2
+    exit 2
+fi
 
 VERBOSE=0
 [ "${1:-}" = "--verbose" ] && VERBOSE=1
