@@ -7,6 +7,13 @@
 #   bash scripts/restore-secrets.sh /path/to/secrets.yaml      # restore from a specific file
 #   bash scripts/restore-secrets.sh --dry-run                  # show what would be done, do nothing
 #   bash scripts/restore-secrets.sh --include <kind>           # only restore specific kinds
+#   bash scripts/restore-secrets.sh --env <path-or-kind>       # restore ONE .env under ~/data/code/ and exit
+#                                                              # Accepts: bare repo-relative path (e.g.
+#                                                              #   better-bet/.env), absolute path
+#                                                              #   (/home/ubuntu/data/code/x-digest/.env),
+#                                                              #   or sanitized kind (code_env_x-digest_env).
+#                                                              # Refuses to overwrite a non-empty target
+#                                                              # unless --force is also passed.
 #
 # --include values (comma-separated, default = all):
 #   ssh          SSH keypair
@@ -17,7 +24,9 @@
 #   goose        ~/.config/goose/secrets.yaml
 #   letsencrypt  ACME account key + privkey
 #   mercury-tasks   /home/ubuntu/.config/mercury-tasks/tokens.json
-#   x-digest     ~/data/code/x-digest/.env
+#   x-digest     ~/data/code/x-digest/.env       [alias for code_env_x-digest_env]
+#   scriptcaster ~/data/code/scriptcaster/.env   [alias for code_env_scriptcaster_env]
+#   code-env     ALL auto-discovered .env* files under ~/data/code/ (excludes *.example)
 #   openchamber  ~/.config/openchamber/startup.env
 #   opencode    ~/.local/share/opencode/auth.json
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
@@ -53,13 +62,17 @@ set -euo pipefail
 SRC="${HOME}/.secrets/secrets.yaml"
 DRY_RUN=0
 INCLUDE_KINDS=""
+ENV_TARGET=""
+FORCE_OVERWRITE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --include) INCLUDE_KINDS="$2"; shift 2 ;;
+    --env) ENV_TARGET="$2"; shift 2 ;;
+    --force) FORCE_OVERWRITE=1; shift ;;
     -h|--help)
-      sed -n '2,40p' "$0"; exit 0 ;;
+      sed -n '2,52p' "$0"; exit 0 ;;
     *)
       if [ -f "$1" ]; then
         SRC="$1"; shift
@@ -92,6 +105,114 @@ in_include() {
  *",$kind,"*) return 0 ;;
  *) return 1 ;;
   esac
+}
+
+# ── Sanitize an absolute filesystem path into the YAML key used by
+# backup-secrets.sh. Mirrors backup-secrets.sh's sanitize_env_kind():
+# strips the $HOME/data/code/ prefix, lowercases, replaces `/` and `.`
+# with `_`, drops everything not [a-z0-9_-], prepends `code_env_`.
+sanitize_env_kind() {
+  local abs_path="$1"
+  local rel="${abs_path#"${HOME}"/data/code/}"
+  if [ "$rel" = "$abs_path" ]; then
+    rel="$(basename "$abs_path")"
+  fi
+  local kind
+  kind="$(printf '%s' "$rel" | tr '[:upper:]' '[:lower:]' | tr '/.' '__')"
+  kind="$(printf '%s' "$kind" | tr -cd 'a-z0-9_-')"
+  if [ -z "$kind" ]; then
+    return 1
+  fi
+  printf 'code_env_%s\n' "$kind"
+}
+
+# ── Resolve --env <arg> into "<yaml_key> <target_path>" on stdout.
+# Accepts any of:
+#   1. Bare repo-relative path:        better-bet/.env
+#   2. Absolute path:                  /home/ubuntu/data/code/x-digest/.env
+#   3. Sanitized YAML kind:            code_env_x-digest_env
+# Returns 0 on success, 1 if --env arg can't be matched to a source YAML
+# block AND doesn't look like a path we can construct a target from.
+# Strips `--env` arg quoting if present.
+resolve_env_target() {
+  local arg="$1"
+  # Strip a leading "code_env_" if the user passed a kind — we re-derive
+  # the target path from it by walking the YAML key list.
+  local bare="${arg#code_env_}"
+  # If the YAML file has a matching key, use it; otherwise we'll fall back
+  # to constructing the target path from the bare name.
+  local matched_path
+  matched_path="$(python3 - "$SRC" "$bare" <<'PYEOF'
+import re, sys
+src, bare = sys.argv[1], sys.argv[2]
+text = open(src).read()
+# Find every `code_env_<x>: |` block and read the matching
+# `# code_env_<x> source: <path>` marker on the line immediately after.
+# This is a stable contract between backup-secrets.sh (emitter) and
+# restore-secrets.sh (reader) — does not depend on section-header text.
+blocks = re.findall(
+    r'^(code_env_[A-Za-z0-9_-]+):\s*\|\s*\n'
+    r'(?:\s+[^\n]*\n)*'
+    r'(?:\s*# code_env_[A-Za-z0-9_-]+ source: (\S+)\s*\n)?',
+    text, re.MULTILINE
+)
+for key, path in blocks:
+    if key == 'code_env_' + bare and path:
+        print(path)
+        sys.exit(0)
+PYEOF
+)"
+  if [ -n "$matched_path" ]; then
+    printf 'code_env_%s %s\n' "$bare" "$matched_path"
+    return 0
+  fi
+  # Fall back: treat `arg` as a path, derive both key and target from it.
+  local target_path="$arg"
+  # Allow bare repo-relative paths.
+  if [ "${target_path:0:1}" != "/" ] && [ "${target_path#./}" = "$target_path" ]; then
+    target_path="${HOME}/data/code/${target_path}"
+  fi
+  # Expand a leading ~ for the human-typed case.
+  target_path="${target_path/#\~/$HOME}"
+  if ! sanitize_env_kind "$target_path" >/dev/null 2>&1; then
+    return 1
+  fi
+  local kind
+  kind="$(sanitize_env_kind "$target_path")"
+  # Final guard: the source YAML must contain this kind (otherwise we'd
+  # silently write garbage from a non-existent block).
+  if ! grep -q "^${kind}: |" "$SRC"; then
+    echo "ERROR: --env '$arg' resolves to YAML key '$kind' but the source" >&2
+    echo "       $SRC does not contain that block." >&2
+    return 1
+  fi
+  printf '%s %s\n' "$kind" "$target_path"
+}
+
+# ── Restore a single auto-discovered code_env_* file. Used by both
+# the --env <arg> path and the code-env include filter. Args: yaml_key, target_path.
+# Honors DRY_RUN and FORCE_OVERWRITE globals.
+restore_one_code_env() {
+  local yaml_key="$1" target_path="$2"
+  # Safety: refuse to clobber a non-empty target unless --force. This
+  # protects against the case where the operator typos --env foo/.env
+  # and the path happens to point at a working .env in some other repo.
+  if [ -f "$target_path" ] && [ -s "$target_path" ] && [ "$FORCE_OVERWRITE" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    warn "refusing to overwrite non-empty $target_path (pass --force to override)"
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    ok "(dry-run) would restore $yaml_key → $target_path (mode 0600)"
+    return 0
+  fi
+  # Make sure the parent directory exists.
+  mkdir -p "$(dirname "$target_path")"
+  if decode_b64_block "$yaml_key" "$target_path" 0600; then
+    ok "$yaml_key → $target_path (mode 0600)"
+  else
+    warn "$yaml_key: SKIPPED (null in source)"
+    return 1
+  fi
 }
 
 # Decode a base64 YAML literal block scalar, write it to DEST with mode MODE.
@@ -216,6 +337,32 @@ else:
 PYEOF
 }
 
+# ── --env <path-or-kind>: restore ONE auto-discovered .env and exit.
+# Runs before the dry-run/main branches so it works regardless of --include.
+# Placed AFTER all the decode helpers so it can call restore_one_code_env
+# → decode_b64_block without a forward-reference problem (bash resolves
+# function names at call time, not parse time, but only functions defined
+# earlier in the same shell session are visible).
+if [ -n "$ENV_TARGET" ]; then
+  echo "=== mercury-host secrets restore — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+  echo
+  echo "Source:    $SRC"
+  echo "Mode:      single .env"
+  echo "Target:    $ENV_TARGET"
+  echo "Force:     $([ $FORCE_OVERWRITE -eq 1 ] && echo 'yes' || echo 'no')"
+  echo
+  if ! RESOLVED="$(resolve_env_target "$ENV_TARGET")"; then
+    echo "ERROR: could not resolve --env '$ENV_TARGET' to a known code_env_* block" >&2
+    echo "       Pass a bare repo-relative path (better-bet/.env), an absolute" >&2
+    echo "       path, or a sanitized kind (code_env_x-digest_env)." >&2
+    exit 2
+  fi
+  KIND="${RESOLVED%% *}"
+  TARGET="${RESOLVED#* }"
+  restore_one_code_env "$KIND" "$TARGET"
+  exit $?
+fi
+
 echo "=== mercury-host secrets restore — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo
 echo "Source:      $SRC"
@@ -266,7 +413,35 @@ PYEOF
     echo "  mercury-tasks: /home/ubuntu/.config/mercury-tasks/tokens.json (mode 0600)"
   fi
   if in_include x-digest; then
-    echo "  x-digest:   ~/data/code/x-digest/.env  (mode 0600)"
+    echo "  x-digest:   ~/data/code/x-digest/.env  (mode 0600) [alias of code_env_x-digest_env]"
+  fi
+  if in_include scriptcaster; then
+    echo "  scriptcaster: ~/data/code/scriptcaster/.env  (mode 0600) [alias of code_env_scriptcaster_env]"
+  fi
+  # Auto-discovered code_env_* blocks: list every one from the source YAML
+  # that matches the include filter (--include code-env selects them all).
+  if in_include code-env; then
+    DRY_CODE_ENVS=$(python3 - "$SRC" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+# Find the auto-discovered section, then enumerate code_env_* blocks inside it.
+blocks = re.findall(
+    r'^(code_env_[A-Za-z0-9_-]+):\s*\|\s*\n'
+    r'(?:\s+[^\n]*\n)*'
+    r'(?:\s*# code_env_[A-Za-z0-9_-]+ source: (\S+)\s*\n)?',
+    text, re.MULTILINE
+)
+for key, path in blocks:
+    if path:
+        print(f'{key}|{path}')
+PYEOF
+)
+    if [ -n "$DRY_CODE_ENVS" ]; then
+      while IFS='|' read -r kind path; do
+        [ -n "$kind" ] || continue
+        echo "  ${kind#code_env_}: $path  (mode 0600)"
+      done <<< "$DRY_CODE_ENVS"
+    fi
   fi
   if in_include openchamber; then
     echo "  openchamber: /home/ubuntu/.config/openchamber/startup.env  (mode 0600)"
@@ -498,8 +673,12 @@ if in_include mercury-tasks; then
 fi
 
 # ── x-digest ────────────────────────────────────────────────────────────
+# Back-compat alias for code_env_x-digest_env. The auto-discovered section
+# below restores the same file under its code_env_* key. Either include
+# works; restoring twice is a no-op (the second decode overwrites with the
+# same bytes).
 if in_include x-digest; then
-  note "restoring x-digest env..."
+  note "restoring x-digest env (alias)..."
   XD_DIR="${HOME}/data/code/x-digest"
   if [ ! -d "$XD_DIR" ]; then
     warn "$XD_DIR does not exist (clone the repo first) — skipping"
@@ -509,6 +688,52 @@ if in_include x-digest; then
     else
       warn "x_digest_env: SKIPPED (null in source)"
     fi
+  fi
+fi
+
+# ── scriptcaster ────────────────────────────────────────────────────────
+# Back-compat alias for code_env_scriptcaster_env. See x-digest note above.
+if in_include scriptcaster; then
+  note "restoring scriptcaster env (alias)..."
+  SC_DIR="${HOME}/data/code/scriptcaster"
+  if [ ! -d "$SC_DIR" ]; then
+    warn "$SC_DIR does not exist (clone the repo first) — skipping"
+  else
+    if decode_b64_block "scriptcaster_env" "$SC_DIR/.env" 0600; then
+      ok "scriptcaster_env"
+    else
+      warn "scriptcaster_env: SKIPPED (null in source)"
+    fi
+  fi
+fi
+
+# ── Auto-discovered code_env_* (.env* under ~/data/code/, excl *.example) ─
+# Each block in the source YAML is mapped to its original on-disk path
+# (parsed from the section comments) and restored individually. Refuses to
+# overwrite a non-empty target unless --force.
+if in_include code-env; then
+  note "restoring auto-discovered code_env_* (.env* under ~/data/code/)..."
+  CODE_ENV_KINDS=$(python3 - "$SRC" <<'PYEOF'
+import re, sys
+text = open(sys.argv[1]).read()
+blocks = re.findall(
+    r'^(code_env_[A-Za-z0-9_-]+):\s*\|\s*\n'
+    r'(?:\s+[^\n]*\n)*'
+    r'(?:\s*# code_env_[A-Za-z0-9_-]+ source: (\S+)\s*\n)?',
+    text, re.MULTILINE
+)
+for key, path in blocks:
+    if path:
+        print(f'{key}|{path}')
+PYEOF
+)
+  if [ -z "$CODE_ENV_KINDS" ]; then
+    warn "no code_env_* blocks found in $SRC"
+  else
+    while IFS='|' read -r kind path; do
+      [ -n "$kind" ] || continue
+      restore_one_code_env "$kind" "$path" || true
+    done <<< "$CODE_ENV_KINDS"
   fi
 fi
 
@@ -564,4 +789,5 @@ ok "restore complete"
 note "restart services to pick up new secrets:"
 note "  sudo systemctl restart nginx"
 note "  systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy openchamber"
+note "  systemctl --user restart scriptcaster x-digest  # if --include code-env restored those"
 note "  systemctl --user restart hermes-cron  # if you have cron-driven tasks"

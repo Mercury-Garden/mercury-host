@@ -75,6 +75,8 @@ bash scripts/backup-secrets.sh
 # Restore host secrets from a backup file
 bash scripts/restore-secrets.sh --dry-run             # preview
 bash scripts/restore-secrets.sh /path/to/secrets.yaml # apply
+bash scripts/restore-secrets.sh --env better-bet/.env # restore ONE .env under ~/data/code/
+bash scripts/restore-secrets.sh --include code-env    # restore ALL auto-discovered .env* files
 
 # Snapshot full host state (irreplaceable configs) to a daily tarball
 bash scripts/backup-mercury-state.sh                  # one-off
@@ -98,15 +100,17 @@ The matching `secrets/secrets.yaml.template` is the sanitized version with every
 | `hermes_env` | `~/.hermes/.env` (full file) | `hermes-env` |
 | `goose_secrets` | `~/.config/goose/secrets.yaml` | `goose-secrets` |
 | `letsencrypt_account_key`, `letsencrypt_privkey` | `/etc/letsencrypt/{accounts,live}/...` | `letsencrypt-account-key`, `letsencrypt-privkey` |
-| `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` | `mercury-tasks-tokens` |
-| `x_digest_env` | `~/data/code/x-digest/.env` | `x-digest-env` |
-| `openchamber_startup_env` | `~/.config/openchamber/startup.env` | `openchamber-startup-env` |
+|| `mercury_tasks_tokens` | `/home/ubuntu/.config/mercury-tasks/tokens.json` | `mercury-tasks-tokens` |
+|| `x_digest_env` | `~/data/code/x-digest/.env` | `x-digest-env` (deprecated → `code-env-files`) |
+|| `scriptcaster_env` | `~/data/code/scriptcaster/.env` | `scriptcaster-env` (deprecated → `code-env-files`) |
+|| `code_env_<sanitized-path>` | every `.env*` under `~/data/code/` (auto-discovered, excludes `*.example`) | `code-env-files` |
+|| `openchamber_startup_env` | `~/.config/openchamber/startup.env` | `openchamber-startup-env` |
 | `opencode_auth` | `~/.local/share/opencode/auth.json` (3 provider API keys) | `opencode-auth` |
 | `discord_notify_config` | `~/.config/discord-notify/config.yaml` (4 per-project HMAC + chat IDs) | `discord-notify-config` |
 | `gogcli_credentials`, `gogcli_keyring_tar_gz` | `~/.config/gogcli/credentials.json` + `keyring/` packed as tar.gz | `gogcli-credentials` |
 | `webhook_server_secret`, `webhook_server_projects` | `~/.config/webhook-server/secret.txt` + `projects.yaml` | `webhook-server-secret`, `webhook-server-projects` |
 
-`scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,openchamber,opencode,discord-notify,gogcli,webhook-server`), and `--dry-run` to preview without writing. The script round-trips byte-identical for every file type (verified locally before commit).
+`scripts/restore-secrets.sh` is the inverse. It accepts `--include <kind>` to scope the restore to a subset (`ssh,github,oauth2,hermes,goose,letsencrypt,mercury-tasks,x-digest,scriptcaster,code-env,openchamber,opencode,gogcli`), `--dry-run` to preview without writing, and `--env <path-or-kind>` to restore ONE auto-discovered `.env` under `~/data/code/` and exit (accepts bare repo-relative path, absolute path, or sanitized YAML kind). The script round-trips byte-identical for every file type (verified locally before commit).
 
 **Bootstrap a fresh host:**
 
