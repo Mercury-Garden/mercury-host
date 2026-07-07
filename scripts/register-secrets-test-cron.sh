@@ -19,6 +19,12 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SMOKE_SRC="$REPO_ROOT/scripts/secrets-test-smoke.sh"
 SMOKE_DEST="$HOME/.hermes/scripts/secrets-test-smoke.sh"
+HARNESS_SRC="$REPO_ROOT/scripts/test-secrets-backup-restore.sh"
+HARNESS_DEST="$HOME/.hermes/scripts/test-secrets-backup-restore.sh"
+BACKUP_SRC="$REPO_ROOT/scripts/backup-secrets.sh"
+BACKUP_DEST="$HOME/.hermes/scripts/backup-secrets.sh"
+RESTORE_SRC="$REPO_ROOT/scripts/restore-secrets.sh"
+RESTORE_DEST="$HOME/.hermes/scripts/restore-secrets.sh"
 JOBS_FILE="$HOME/.hermes/cron/jobs.json"
 CRON_NAME="secrets-test-smoke"
 SCHEDULE="0 9 * * 0"           # Sun 04:00 Bogota = 09:00 UTC
@@ -36,6 +42,20 @@ mkdir -p "$HOME/.hermes/scripts"
 cp -f "$SMOKE_SRC" "$SMOKE_DEST"
 chmod 755 "$SMOKE_DEST"
 echo "[secrets-test-smoke] copied $SMOKE_SRC → $SMOKE_DEST"
+# Also vendor the harness itself — the smoke wrapper looks for it
+# beside itself in ~/.hermes/scripts/ (NOT relative to $REPO_ROOT, which
+# the cron knows nothing about).
+cp -f "$HARNESS_SRC" "$HARNESS_DEST"
+chmod 755 "$HARNESS_DEST"
+echo "[secrets-test-smoke] copied $HARNESS_SRC → $HARNESS_DEST"
+# And vendor backup-secrets.sh + restore-secrets.sh, which the harness
+# shells out to. The harness (post #38 vendor-aware path search) will
+# find them next to itself in ~/.hermes/scripts/.
+cp -f "$BACKUP_SRC" "$BACKUP_DEST"
+chmod 755 "$BACKUP_DEST"
+cp -f "$RESTORE_SRC" "$RESTORE_DEST"
+chmod 755 "$RESTORE_DEST"
+echo "[secrets-test-smoke] copied backup-secrets.sh + restore-secrets.sh → $HOME/.hermes/scripts/"
 
 # ── 2. If a cron with this name already exists, remove it for clean re-register ──
 if [ -f "$JOBS_FILE" ] && command -v jq >/dev/null 2>&1; then
