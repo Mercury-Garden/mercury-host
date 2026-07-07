@@ -161,14 +161,14 @@ cron:
         # health, posts Discord alert to home channel on failure. See
         # webhook-server#22 for the script.
         schedule: "*/5 * * * *"
-      - id: SECRETS-TEST-SMOKE          # placeholder; real ID assigned at register time
+      - id: 48b028f7098a
         name: secrets-test-smoke
-        # Weekly round-trip smoke of the auto-discover backup + per-file
-        # restore harness (scripts/test-secrets-backup-restore.sh, 34
-        # assertions). no_agent cron that runs ~/.hermes/scripts/secrets-test-smoke.sh
-        # Sun 04:00 Bogota. Silent on success; Discord alert on failure.
-        # Registered by scripts/register-secrets-test-cron.sh — the real
-        # ID replaces the placeholder after first run.
+        # Weekly smoke of the backup/restore round-trip harness.
+        # no_agent cron running ~/.hermes/scripts/secrets-test-smoke.sh
+        # -> scripts/test-secrets-backup-restore.sh (34 assertions).
+        # Sun 04:00 Bogota = 09:00 UTC. Silent on success, Discord
+        # home-channel alert on failure. Registered by
+        # scripts/register-secrets-test-cron.sh (#37).
         schedule: "0 9 * * 0"
   # Per-profile cron jobs (one block per Hermes profile). Each block lists
   # the jobs in that profile's ~/.hermes/profiles/<name>/cron/jobs.json so
