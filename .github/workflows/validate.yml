@@ -7,6 +7,12 @@ on:
   pull_request:
     branches: [main]
 
+# The `secrets-test` job below is label-gated: it only runs when a PR
+# has the `secrets-test` label. Add the label manually when you want CI
+# to exercise the auto-discover backup + per-file restore round-trip
+# (scripts/test-secrets-backup-restore.sh). The default gate (lint,
+# shellcheck, secrets-scan, audit dry-run) stays fast on every PR.
+
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -41,3 +47,23 @@ jobs:
           # because no services are running there — we only assert that the script
           # exits without a bash error (not the exit code itself).
           bash scripts/audit.sh || true
+
+  secrets-test:
+    # Runs scripts/test-secrets-backup-restore.sh — the round-trip harness
+    # for the auto-discover backup + per-file restore feature (PR #31).
+    # Label-gated so it doesn't run on every PR. The harness is hermetic
+    # (synthetic $HOME under mktemp -d, no real secrets) so it's safe to
+    # run anywhere.
+    runs-on: ubuntu-24.04
+    if: contains(github.event.pull_request.labels.*.name, 'secrets-test')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install shellcheck (required by the test harness indirectly)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq shellcheck
+
+      - name: run secrets backup/restore round-trip test
+        run: |
+          bash scripts/test-secrets-backup-restore.sh --verbose
