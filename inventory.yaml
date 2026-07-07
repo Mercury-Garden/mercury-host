@@ -214,10 +214,10 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-05T08-00-07Z"
-  last_size_mb: 656
-  last_file_count: 26905
-  last_sha256: "09042122e1621a850160725432dc3311abd246d411592122a97dc44e5b2294d7"
+  last_run_at: "2026-07-07T16-26-57Z"
+  last_size_mb: 660
+  last_file_count: 26970
+  last_sha256: "85f9d4009525aabe1b06793e4ddc6c71ef847f9d451394b3cb785a4c2e53c4a1"
   last_verify_ok: "5/5"
   last_verify_at: "2026-07-05T08-01-28Z"
   tarballs_on_disk: 6
