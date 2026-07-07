@@ -202,7 +202,7 @@ A green verify JSON means 5 random files were extracted and diff'd against the l
 
 - **Schedule**: `mercury-state-backup.timer` fires daily at 03:00 `America/Bogota` (= 08:00 UTC), `Persistent=true` so missed runs catch up after reboot.
 - **Retention**: `find -mtime +7` keeps the 7 most recent tarballs. At ~500 MB per day, that's ~3.5 GB on `/dev/sdb` (which has 45 GB free).
-- **Logs**: `/var/log/mercury-state-backup.log` (append, last 50 lines surfaced by `journalctl -u mercury-state-backup.service`).
+- **Logs**: `~/.local/state/mercury-state-backup/backup.log` (the XDG state dir; always user-writable), plus the systemd journal (`journalctl -u mercury-state-backup.service`).
 - **Capture**: `scripts/capture.sh` refreshes the `state_backup:` block in `inventory.yaml` with the latest tarball's timestamp, size, and compression ratio.
 - **Audit**: `scripts/audit.sh` warns if no fresh backup exists (default 36 h threshold).
 

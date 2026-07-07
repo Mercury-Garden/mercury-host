@@ -41,11 +41,18 @@ VERIFY="${BACKUP_ROOT}/${STATE_NAME}-${DATE_UTC}.verify.json"
 # and tends to fill up; /home/ubuntu/data lives on /dev/sdb with 45GB free.
 TMP_DIR="$(mktemp -d -p "${BACKUP_ROOT}" -t mercury-state-XXXXXX)"
 TMP_TAR="${TMP_DIR}/archive.tar.zst"
-LOG_FILE="/home/ubuntu/data/backups/.backup.log"
+# Log file lives under XDG state dir so it's always user-writable.
+# Previous design wrote to /home/ubuntu/data/backups/.backup.log, which was
+# originally created by a root-owned timer and never reopened as ubuntu:
+# every backup ran for years with `tee: Permission denied` on stderr and
+# the log file stayed stale. Moving to ~/.local/state avoids the perms trap.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mercury-state-backup"
+LOG_FILE="${LOG_DIR}/backup.log"
 
 mkdir -p "${BACKUP_ROOT}"
 
 log() {
+    mkdir -p "${LOG_DIR}"
     printf '[%s] %s\n' "${STAMP}" "$*" | tee -a "${LOG_FILE}"
 }
 
