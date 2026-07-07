@@ -178,10 +178,13 @@ cron:
           schedule: "0 8 * * *"
         - id: 0d04b6961c88
           name: node-core-daily
-          schedule: "0 9 * * *"
+          schedule: "0 15 * * *"
         - id: aee156dfb5ec
           name: health-evening
           schedule: "0 22 * * *"
+        - id: f63caaebc781
+          name: email-classify-and-publish
+          schedule: "30 14 * * 1-5"
   system_timers:
     - certbot.timer
     - apt-daily.timer
