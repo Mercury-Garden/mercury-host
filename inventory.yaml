@@ -194,6 +194,13 @@ cron:
         - id: f63caaebc781
           name: email-classify-and-publish
           schedule: "30 14 * * 1-5"
+        - id: b4d65d7dbffe
+          name: codegraph-nightly-sync
+          # Nightly sync-and-index of the edsadr/node fork against
+          # nodejs/node (runs the pr-reviewer/tools/sync_and_index script
+          # and reports). local delivery only (writes to log) — no Discord
+          # post.
+          schedule: "30 6 * * *"
   system_timers:
     - certbot.timer
     - apt-daily.timer
