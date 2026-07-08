@@ -22,6 +22,7 @@
 #   openchamber-startup-env       ~/.config/openchamber/startup.env
 #   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
 #   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
+#   openwiki                      ~/.openwiki/.env                       (added 2026-07-08)
 #
 # Auto-discovered (added 2026-07-07):
 #   code_env_<sanitized-path>     EVERY `.env*` file under ~/data/code/, except
@@ -249,6 +250,12 @@ PRIVKEY_REAL="$(readlink -f "$PRIVKEY_LINK" 2>/dev/null || echo "$PRIVKEY_LINK")
 OPENCODE_AUTH="${HOME}/.local/share/opencode/auth.json"
 GOGCLI_CREDENTIALS="${HOME}/.config/gogcli/credentials.json"
 GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
+# OpenWiki (LangChain repo-documentation agent) — created on first `openwiki --init`.
+# Holds the API key + provider/base_url/model pins. RECOVERABLE (regenerates on
+# next --init) but worth a backup so a host restore doesn't need a coding-plan
+# portal round-trip. `~/.openwiki/openwiki.sqlite` (the session/index cache) is
+# NOT backed up — it rebuilds on the next openwiki run and is ~130MB.
+OPENWIKI_ENV="${HOME}/.openwiki/.env"
 
 # Build the YAML
 {
@@ -414,6 +421,12 @@ GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
   # The keyring is a directory of 3 encrypted blobs; pack as tar.gz + b64.
   # Restoring requires GOG_KEYRING_PASSWORD from hermes .env to decrypt.
   pack_dir_b64_block "gogcli_keyring_tar_gz" "$GOGCLI_KEYRING_DIR" || miss "$HOME/.config/gogcli/keyring"
+  echo
+  echo "# ── openwiki (langchain repo-documentation agent) ──────────────"
+  # MinMax coding-plan key + provider/base_url/model pins. Written by
+  # `openwiki --init`. Restoring with --include openwiki makes the next
+  # `cd <repo> && openwiki --update` run without re-init.
+  emit_b64_block "openwiki_env" "$OPENWIKI_ENV" || miss "$HOME/.openwiki/.env"
   echo
   # discord-notify + webhook-server removed 2026-07-05 (PR #28). The systemd
   # units and projects were decommissioned in PR #24 but their config dirs

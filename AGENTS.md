@@ -63,6 +63,7 @@ All paths are relative to repo root unless noted.
 | Restore only one subsystem | `bash scripts/restore-secrets.sh --include oauth2` |
 | Restore one specific `.env` under `~/data/code/` (per-file granularity) | `bash scripts/restore-secrets.sh --env better-bet/.env` |
 | Restore all auto-discovered `.env*` files under `~/data/code/` | `bash scripts/restore-secrets.sh --include code-env` |
+| Restore only the openwiki config (`~/.openwiki/.env`) | `bash scripts/restore-secrets.sh --include openwiki` |
 | Run the secrets backup/restore round-trip test (synthetic $HOME, 34 assertions) | `bash scripts/test-secrets-backup-restore.sh` |
 | Register the weekly secrets-test smoke cron (no_agent, Sun 04:00 Bogota) | `bash scripts/register-secrets-test-cron.sh` |
 | Snapshot irreplaceable state to a daily tarball | `bash scripts/backup-mercury-state.sh` |
