@@ -738,6 +738,149 @@ WS_DRIFT=$(echo "$WS_OUT" | grep '__WS_DRIFT__:' | tail -1 | sed 's/.*://')
 WS_DRIFT=${WS_DRIFT:-0}
 DRIFT=$((DRIFT + WS_DRIFT))
 
+# ── 12. OpenWiki (LangChain repo-documentation agent) ───────────────────
+# Verifies the openwiki CLI is installed (per packages/node.yaml →
+# globally_pinned_packages) and that the configured ~/.openwiki/.env
+# matches inventory.yaml → openwiki:. Does NOT verify the API key value.
+# Source of truth: inventory.yaml (provider / base_url / model / required
+# env vars). The env file is written by `openwiki --init` and is a hand-edit
+# file thereafter; this section catches drift if any of the four required
+# env vars gets dropped or the base_url drifts.
+echo
+echo "[openwiki]"
+OW_OUT=$(python3 - "$INV" 2>&1 <<'PYEOF'
+import os, pathlib, re, sys
+
+inv_path = pathlib.Path(sys.argv[1])
+text = inv_path.read_text()
+home = pathlib.Path.home()
+ow_env = home / '.openwiki' / '.env'
+
+def get_value_block(block, key):
+    """Read a key under an `openwiki:` block — top-level of the block
+    means column 2 (one indent past `openwiki:`). Match either column.
+    Strips inline trailing comments after whitespace."""
+    m = re.search(rf'^[ \t]{{0,4}}{re.escape(key)}:\s*(.*)$', block, re.MULTILINE)
+    if not m:
+        return None
+    v = m.group(1).strip()
+    v = re.split(r'\s+#', v, maxsplit=1)[0].strip()
+    if v in ('null', '~', ''):
+        return None
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        return v[1:-1]
+    return v
+
+# Find the openwiki: block. Match from `^openwiki:` (column 0) to the next
+# column-0 key or EOF. Tolerate blank/comment lines between keys (mirrors
+# the cron-block heredoc pattern).
+ow = re.search(r'^openwiki:\n((?:[^\n]*\n)*?)(?=^[A-Za-z_][^\n]*:\n|\Z)', text, re.MULTILINE)
+if not ow:
+    print("  ! openwiki: section not found in inventory, skipping")
+    print("__OW_DRIFT__:0")
+    sys.exit(0)
+block = ow.group(1)
+
+expected_provider  = get_value_block(block, 'provider')
+expected_base_url  = get_value_block(block, 'base_url')
+expected_model     = get_value_block(block, 'model')
+expected_cfg       = get_value_block(block, 'config_file')
+expected_cfg_mode  = get_value_block(block, 'config_file_mode')
+
+# Parse env_keys_required: list of env-var names. Mirrors [web_search] shape.
+ek_match = re.search(r'^  env_keys_required:\n((?:    - [^\n]*\n)*)', block, re.MULTILINE)
+expected_env_keys = set()
+if ek_match:
+    expected_env_keys = set(re.findall(r'^\s*- (\S+)', ek_match.group(1), re.MULTILINE))
+
+drift = 0
+
+import shutil
+
+def find_openwiki():
+    """Locate the openwiki binary on PATH (or under the volta tools dir).
+    Mirrors `command -v openwiki` semantics: returns the absolute path or None."""
+    return shutil.which('openwiki')
+
+# 1. CLI on PATH
+if expected_cfg is None:
+    expected_cfg = '~/.openwiki/.env'   # safe default
+
+# Sanity: if the user ran `openwiki --init`, ~/.openwiki/.env exists. Until
+# that point we still want the binary check to pass (the binary is installed
+# via volta; the env file is user-driven). Don't drift on the env file
+# existence — drift on its CONFIG contents when present.
+ow_bin = find_openwiki()
+if ow_bin:
+    print(f"  ✓ openwiki on PATH: {ow_bin}")
+else:
+    print("  ✗ DRIFT: openwiki not on PATH — reinstall with `volta install openwiki`")
+    drift += 1
+
+if ow_env.exists():
+    mode = oct(ow_env.stat().st_mode & 0o777)
+    # Python returns '0o600' (octal-prefixed) — strip for comparison.
+    mode_digits = mode.lstrip('0o').lstrip('0') or '0'
+    if mode_digits == str(expected_cfg_mode or 600):
+        print(f"  ✓ ~/{ow_env.relative_to(home)} mode 0{mode_digits}")
+    else:
+        print(f"  ✗ DRIFT: ~/.openwiki/.env mode 0{mode_digits} (want 0{expected_cfg_mode})")
+        drift += 1
+
+    env_text = ow_env.read_text()
+    def env_get(k):
+        m = re.search(rf'^{re.escape(k)}=', env_text, re.MULTILINE)
+        if not m:
+            return None
+        # Read the full line, strip key prefix + optional quotes.
+        line_re = re.search(rf'^{re.escape(k)}=(.+)$', env_text, re.MULTILINE)
+        if not line_re:
+            return None
+        v = line_re.group(1).strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            return v[1:-1]
+        return v
+
+    # Required keys present (presence only for ANTHROPIC_API_KEY; value-shape
+    # checks for the rest, since those are configuration not credentials).
+    for k in expected_env_keys:
+        v = env_get(k)
+        if v is None or v == '':
+            print(f"  ✗ DRIFT: {k} missing/empty in {ow_env}")
+            drift += 1
+        else:
+            masked = v
+            if k == 'ANTHROPIC_API_KEY':
+                # Never print the key value — mask to length only.
+                masked = f"<{len(v)}-char present>"
+            print(f"  ✓ {k} = {masked}")
+
+    # Cross-checks against inventory expectations (when those are set)
+    def check_eq(label, actual, expected, expected_label):
+        if expected is None:
+            return 0
+        if actual != expected:
+            print(f"  ✗ DRIFT: {label} = {actual!r} (expected {expected!r} per inventory.yaml → openwiki.{expected_label})")
+            return 1
+        return 0
+
+    drift += check_eq('OPENWIKI_PROVIDER',  env_get('OPENWIKI_PROVIDER'),  expected_provider,  'provider')
+    drift += check_eq('ANTHROPIC_BASE_URL', env_get('ANTHROPIC_BASE_URL'), expected_base_url,  'base_url')
+    drift += check_eq('OPENWIKI_MODEL_ID',  env_get('OPENWIKI_MODEL_ID'),  expected_model,     'model')
+else:
+    # Env file not present yet — that's the "user hasn't run openwiki --init"
+    # state we explicitly accepted at install time. Note, do not drift.
+    print("  ! ~/.openwiki/.env not present yet — run `openwiki --init` to configure provider + API key")
+    print("    (intentional per 2026-07-08 install decision; this NOTE does not count as drift)")
+
+print(f"__OW_DRIFT__:{drift}")
+PYEOF
+)
+echo "$OW_OUT" | grep -v '__OW_DRIFT__:' || true
+OW_DRIFT=$(echo "$OW_OUT" | grep '__OW_DRIFT__:' | tail -1 | sed 's/.*://')
+OW_DRIFT=${OW_DRIFT:-0}
+DRIFT=$((DRIFT + OW_DRIFT))
+
 # ── summary ──────────────────────────────────────────────────────────────
 echo
 if [ "$DRIFT" -eq 0 ]; then
