@@ -472,8 +472,8 @@ openwiki:
     pinned_to_node: 24.18.0
     refresh: packages/node.yaml → globally_pinned_packages (capture.sh)
   provider: anthropic              # matches OPENWIKI_PROVIDER in ~/.openwiki/.env
-  base_url: https://platform.minimax.io/   # matches ANTHROPIC_BASE_URL in ~/.openwiki/.env
-  model: MiniMax-M3                # matches OPENWIKI_MODEL_ID in ~/.openwiki/.env
+  base_url: https://api.minimax.io/anthropic   # matches ANTHROPIC_BASE_URL in ~/.openwiki/.env
+  model: MiniMax-M2.7-highspeed    # matches OPENWIKI_MODEL_ID in ~/.openwiki/.env
   config_file: ~/.openwiki/.env
   config_file_mode: 600            # no leading zero in bash array (see audit.sh pitfall)
   env_keys_required:
