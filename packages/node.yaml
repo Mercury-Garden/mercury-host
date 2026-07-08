@@ -32,6 +32,9 @@ node_managers:
       - name: opencode-ai
         version: 1.17.13
         node: 24.18.0
+      - name: openwiki
+        version: 0.0.3
+        node: 24.18.0
       - name: pnpm
         version: 11.10.0
         node: 24.18.0
