@@ -201,6 +201,16 @@ cron:
           # and reports). local delivery only (writes to log) — no Discord
           # post.
           schedule: "30 6 * * *"
+        - id: 9a2156cc9f6d
+          name: meeting-notes-tasks-daily
+          schedule: "45 12 * * 1-5"
+          # Mon–Fri 12:45 UTC = 07:45 America/Bogota. Auto-apply mode
+          # approved by user on 2026-07-08; LLM groups meeting action
+          # items against the active NodeSource task view and
+          # POST/PATCHes via mercury-tasks HTTP. See the cron prompt
+          # in ~/.hermes/profiles/mercury-butler/cron/jobs.json for
+          # the full Domain E/F/G/H policy.
+          deliver: "discord:1519752600751312927"
   system_timers:
     - certbot.timer
     - apt-daily.timer
