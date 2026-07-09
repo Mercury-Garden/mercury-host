@@ -30,6 +30,7 @@
 #   openchamber  ~/.config/openchamber/startup.env
 #   opencode    ~/.local/share/opencode/auth.json
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
+#   openwiki    ~/.openwiki/.env                                (MinMax coding-plan key for openwiki)
 #
 # Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
 # but restore logic lingered. If a future fork needs the configs, the
@@ -453,6 +454,9 @@ PYEOF
     echo "  gogcli:     ~/.config/gogcli/credentials.json  (mode 0600)"
     echo "              ~/.config/gogcli/keyring/          (3 encrypted blobs, tar.gz)"
   fi
+  if in_include openwiki; then
+    echo "  openwiki:   ~/.openwiki/.env  (mode 0600, MinMax coding-plan API key)"
+  fi
   echo
   exit 0
 fi
@@ -777,6 +781,21 @@ if in_include gogcli; then
     ok "gogcli_keyring"
   else
     warn "gogcli_keyring: SKIPPED (null in source or extraction failed)"
+  fi
+fi
+
+# ── openwiki (~/.openwiki/.env — MinMax coding-plan key) ────────────────
+# Mirrors the opencode/gogcli standalone-config pattern. After restore, the
+# next `cd <repo> && openwiki` invocation reads the key from ~/.openwiki/.env
+# without needing `openwiki --init` again.
+if in_include openwiki; then
+  note "restoring openwiki .env..."
+  OW_DIR="${HOME}/.openwiki"
+  mkdir -p "$OW_DIR"
+  if decode_b64_block "openwiki_env" "$OW_DIR/.env" 0600; then
+    ok "openwiki_env"
+  else
+    warn "openwiki_env: SKIPPED (null in source)"
   fi
 fi
 
