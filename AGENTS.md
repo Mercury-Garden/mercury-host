@@ -100,6 +100,17 @@ catches most issues before push.
   with sibling `manifest.json` and `verify.json`. Exit codes: 0 ok,
   1 tar failed, 2 manifest failed, 3 verify warning (non-fatal),
   4 prune warning (non-fatal).
+- **`backup-mercury-state.sh` does a two-pass tar, combined via
+  `tar --concatenate`.** Pass 1 runs as $USER over BACKUP_PATHS; pass 2
+  runs as root via `sudo -n tar` over ELEVATED_PATHS (currently
+  `/etc/nginx` + `/etc/letsencrypt`) to capture mode-0600 vhost configs
+  and letsencrypt cert keys. The two uncompressed tar files are merged
+  with `tar --concatenate -f` (which rewrites the EOF marker), then
+  zstd-compressed. Don't try to combine the two passes via subshell
+  `;` piping — GNU tar's EOF marker (two 512-byte zero blocks) makes
+  the second pass invisible to `tar -I zstd -tf` / `tar -I zstd -xf`.
+  The ACME account `private_key.json` is explicitly excluded from pass 2
+  (regenerable via `certbot register --replace`; no DR value).
 - **`restore.sh` symlinks (not copies) every `systemd/user/*.service`
   AND `systemd/system/*.{service,timer}` into `~/.config/systemd/user/`.**
   The `systemd/system/` dir holds mercury-state-backup specifically —
