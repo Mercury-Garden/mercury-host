@@ -163,6 +163,60 @@ for svc in nginx ollama cron hermes-dashboard; do
   fi
 done
 
+# ── 4a. systemd services that should be ACTIVELY running ────────────────
+# This is intentionally separate from [systemd-system] above, which only
+# checks is-enabled. A service can be enabled but stopped — the canonical
+# example is ollama, which is enabled but the user often keeps it
+# inactive when not in use. We can't blanket-check is-active for every
+# enabled service without false positives.
+#
+# This list is "services that should be running 24/7 unless someone has
+# just stopped them on purpose." If you stop one of these temporarily,
+# expect audit to scream at you until you start it back. The point is
+# to catch the silent multi-day downtime that hit hermes-dashboard on
+# 2026-07-05 → 2026-07-09 (the unit stopped cleanly, `is-enabled` still
+# said enabled, audit never noticed). See AGENTS.md post-mortem note.
+echo
+echo "[active-services]"
+for svc in nginx cron hermes-dashboard; do
+  if ! systemctl is-enabled "$svc" >/dev/null 2>&1; then
+    # Not enabled — skip; [systemd-system] will already have flagged that.
+    continue
+  fi
+  # Note: `is-active` exits 3 on inactive/dead/failed and 4 on unknown —
+  # that's the documented behavior, not an error. We must NOT let
+  # those exit codes propagate up under `set -e` (the script is run
+  # with `set -euo pipefail`), so swallow them here. The actual state
+  # string is what we care about.
+  active_state=""
+  if active_state=$(systemctl is-active "$svc" 2>/dev/null); then
+    :
+  else
+    # is-active returned non-zero; `active_state` is whatever partial
+    # output it produced (usually "inactive" or "unknown"). Fall through
+    # to the case below, which classifies correctly.
+    :
+  fi
+  active_state="${active_state:-unknown}"
+  case "${active_state}" in
+    active)
+      ok "$svc active (system)"
+      ;;
+    failed)
+      drift "$svc in ActiveState=failed (system) — fix: sudo systemctl status $svc; sudo systemctl restart $svc"
+      ;;
+    inactive|dead|activating|reloading|deactivating)
+      # Get how long it's been down to flag long-running silent outages
+      inactive_since=$(systemctl show "$svc" -p InactiveEnterTimestamp --value 2>/dev/null || true)
+      inactive_since="${inactive_since:-unknown}"
+      drift "$svc NOT active (state=${active_state}, inactive-since=${inactive_since})"
+      ;;
+    *)
+      note "$svc in unexpected state: ${active_state}"
+      ;;
+  esac
+done
+
 # ── 4b. Hermes STT backend ──────────────────────────────────────────────
 # Tracks the local STT install that backs Hermes' Spanish-voice-message
 # transcription. The pip package lives in the hermes-agent venv; the model

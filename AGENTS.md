@@ -111,6 +111,18 @@ catches most issues before push.
   the second pass invisible to `tar -I zstd -tf` / `tar -I zstd -xf`.
   The ACME account `private_key.json` is explicitly excluded from pass 2
   (regenerable via `certbot register --replace`; no DR value).
+- **`audit.sh` checks two things for system services: enabled AND
+  active (in separate sections).** The `[systemd-system]` section only
+  checks `is-enabled`. A separate `[active-services]` section checks
+  `is-active` for the small allowlist of services that should be
+  running 24/7 (currently `nginx`, `cron`, `hermes-dashboard`). This
+  is what would have caught the 2026-07-05 → 2026-07-09 dashboard
+  silent outage: the unit had stopped cleanly (exit 0), `is-enabled`
+  still said enabled, the old audit didn't notice. With this check,
+  audit exits non-zero and prints an actionable `drift` line the moment
+  the service goes down. **`ollama` is intentionally NOT in the active
+  list** — it's enabled but commonly stopped when not in use. If you
+  add a new 24/7 service, add it to BOTH lists in audit.sh.
 - **`restore.sh` symlinks (not copies) every `systemd/user/*.service`
   AND `systemd/system/*.{service,timer}` into `~/.config/systemd/user/`.**
   The `systemd/system/` dir holds mercury-state-backup specifically —
