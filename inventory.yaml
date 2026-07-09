@@ -213,6 +213,20 @@ state_backup:
   # Two layers:
   #   1. Local zstd-compressed tarballs in /home/ubuntu/data/backups/ (fast restore)
   #   2. OCI Block Volume monthly snapshot of /dev/sdb (DR — survives VM death)
+  #
+  # The service + timer unit files intentionally live in `systemd/system/`
+  # (NOT `systemd/user/`) because:
+  #   1. The service pins `Environment="HOME=/home/ubuntu"` and uses
+  #      `StandardOutput=journal` — both awkward under the user manager.
+  #   2. The timer fires at 03:00 Bogota, before any user session may be
+  #      active. A user-manager timer can be skipped across logouts.
+  #   3. The script under `set -u` reads `$HOME` for its XDG_STATE_HOME
+  #      default; the system manager would resolve `$HOME` to `/`.
+  # Moving the units to `systemd/user/` would silently regress all three.
+  # `scripts/restore.sh` special-cases this dir: it symlinks every
+  # `systemd/system/*.{service,timer}` into `~/.config/systemd/user/` and
+  # enables them there. `scripts/audit.sh` checks the resulting timer
+  # state and fails loudly if it disappears again.
   script: scripts/backup-mercury-state.sh
   service: mercury-state-backup.service
   timer: mercury-state-backup.timer
@@ -221,12 +235,12 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-07T16-26-57Z"
-  last_size_mb: 660
-  last_file_count: 26970
-  last_sha256: "85f9d4009525aabe1b06793e4ddc6c71ef847f9d451394b3cb785a4c2e53c4a1"
+  last_run_at: "2026-07-09T16-20-56Z"
+  last_size_mb: 680
+  last_file_count: 26571
+  last_sha256: "e7b79df3e722bdfab128f225f781d0029f8e88a85f4618e48bc209bc4b70bd5e"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-07-05T08-01-28Z"
+  last_verify_at: "2026-07-09T16-22-01Z"
   tarballs_on_disk: 6
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via

@@ -100,6 +100,13 @@ catches most issues before push.
   with sibling `manifest.json` and `verify.json`. Exit codes: 0 ok,
   1 tar failed, 2 manifest failed, 3 verify warning (non-fatal),
   4 prune warning (non-fatal).
+- **`restore.sh` symlinks (not copies) every `systemd/user/*.service`
+  AND `systemd/system/*.{service,timer}` into `~/.config/systemd/user/`.**
+  The `systemd/system/` dir holds mercury-state-backup specifically —
+  see the `state_backup:` block in `inventory.yaml` for why. Symlink
+  means `git pull && systemctl --user daemon-reload` picks up unit
+  edits without re-running restore.sh. The loop is idempotent: re-runs
+  are no-ops, and `enable` on an already-enabled unit exits 0.
 - **`backup-secrets.sh` auto-discovers every `.env*` file under
   `~/data/code/`** (excludes `*.example` / `*.sample` templates) and
   captures each as a `code_env_<sanitized-path>` b64 block in

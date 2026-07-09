@@ -584,25 +584,68 @@ else:
     print(f"  ! last_run_at not set — running capture.sh will populate it")
 
 # 3. Systemd timer is enabled + scheduled
-import subprocess
+#
+# We can't trust `systemctl show UnitFileState=enabled` alone — that field
+# reflects systemd's *cached* enablement database, which can say "enabled"
+# long after the underlying unit file has been deleted (which is exactly
+# the 2026-07-08 silent-failure mode that hid the missing timer from us
+# for ~3 days). We have to check three things independently:
+#   (a) the symlink in ~/.config/systemd/user/ points at a real source
+#   (b) `systemctl is-enabled` exits 0 (and is not "static" or "masked")
+#   (c) the unit loaded successfully (ActiveState != "failed")
+# Any one failing is a DRIFT.
+import os, subprocess
+
+timer_link = os.path.expanduser('~/.config/systemd/user/mercury-state-backup.timer')
+service_link = os.path.expanduser('~/.config/systemd/user/mercury-state-backup.service')
+
+# (a) Symlink reality check
+for link in (timer_link, service_link):
+    if not (os.path.islink(link) and os.path.exists(link)):
+        print(f"  ✗ DRIFT: {link} is missing or dangling")
+        print(f"     daily backups have stopped — the unit file is no longer installed")
+        print(f"     fix: bash scripts/restore.sh  (it re-creates the symlink)")
+        drift += 1
+
+# (b) systemctl is-enabled — catches "static", "masked", or non-zero exit
 try:
-    out = subprocess.check_output(
-        ['systemctl', 'show', 'mercury-state-backup.timer',
-         '--property=ActiveState,UnitFileState,NextElapseUSecRealtime'],
-        text=True, stderr=subprocess.DEVNULL
+    res = subprocess.run(
+        ['systemctl', '--user', 'is-enabled', 'mercury-state-backup.timer'],
+        capture_output=True, text=True
     )
-    state = {}
-    for line in out.splitlines():
-        if '=' in line:
-            k, _, v = line.partition('=')
-            state[k] = v
-    if state.get('UnitFileState') != 'enabled':
-        print(f"  ✗ DRIFT: mercury-state-backup.timer is {state.get('UnitFileState')}, expected enabled")
+    is_enabled = res.stdout.strip()
+    if res.returncode != 0 or is_enabled not in ('enabled', 'enabled-runtime'):
+        print(f"  ✗ DRIFT: mercury-state-backup.timer is-enabled={is_enabled!r} (rc={res.returncode})")
+        print(f"     fix: bash scripts/restore.sh")
         drift += 1
     else:
-        print(f"  ✓ timer: enabled, next run {state.get('NextElapseUSecRealtime', 'unknown')}")
+        print(f"  ✓ timer: is-enabled={is_enabled}")
+except FileNotFoundError:
+    print("  ! systemctl not found, skipping timer check")
+
+# (c) Loaded and not failed
+try:
+    state_out = subprocess.check_output(
+        ['systemctl', '--user', 'show', 'mercury-state-backup.timer',
+         '--property=ActiveState,NextElapseUSecRealtime'],
+        text=True, stderr=subprocess.DEVNULL
+    )
+    state = dict(line.partition('=')[0::2] for line in state_out.splitlines() if '=' in line)
+    active = state.get('ActiveState', '')
+    next_run = state.get('NextElapseUSecRealtime', '')
+    if active == 'failed':
+        print(f"  ✗ DRIFT: mercury-state-backup.timer is in ActiveState=failed")
+        print(f"     fix: bash scripts/restore.sh")
+        drift += 1
+    elif not next_run:
+        print(f"  ✗ DRIFT: mercury-state-backup.timer has no scheduled next run")
+        print(f"     ActiveState={active!r}, NextElapseUSecRealtime={next_run!r}")
+        print(f"     fix: bash scripts/restore.sh")
+        drift += 1
+    else:
+        print(f"  ✓ timer: active={active}, next_run={next_run}")
 except (subprocess.CalledProcessError, FileNotFoundError) as e:
-    print(f"  ! systemd check failed: {e}")
+    print(f"  ! could not read timer state: {e!r}")
 
 # 4. OCI Block Volume backup (the outer DR layer) — check last backup age
 # This requires oci CLI on the host, which we don't have. Skip but log.
