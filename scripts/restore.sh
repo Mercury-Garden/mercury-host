@@ -93,14 +93,62 @@ else
   echo "        ln -s $DATA_VOL/.local/share $HOME/.local/share"
 fi
 
-# ── 5. systemd user services enabled ─────────────────────────────────────
-echo "[systemd] enabling user services"
+# ── 5. systemd user units enabled (services + timers, user/ + system/) ──
+#
+# Why both dirs and both kinds:
+#   - `systemd/user/` holds most of our services (hermes-gateway, oauth2-proxy,
+#     mercury-tasks, openchamber, obscura-mcp).
+#   - `systemd/system/` holds mercury-state-backup.{service,timer} — it
+#     needs `HOME=/home/ubuntu` pinned, `StandardOutput=journal`, and to
+#     fire at 03:00 Bogota before any user session may be active. Moving
+#     it to `user/` would silently regress all three. (See
+#     inventory.yaml `state_backup:` block for the canonical note.)
+#
+# Why symlink instead of copy: the backup units in particular get
+# hand-edited and pulled frequently (see PRs #34, #38). Symlink means
+# `git pull && systemctl --user daemon-reload` picks up the change with
+# no re-run of restore.sh. A copy would silently desync.
+#
+# Idempotent: re-running this block is a no-op. `enable` on an already-
+# enabled unit exits 0. The symlink `ln -sf` is a no-op if the target
+# already points at the right source.
+echo "[systemd] enabling user units"
 mkdir -p "$HOME/.config/systemd/user/"
-for unit in "$REPO_ROOT"/systemd/user/*.service; do
+SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+
+enable_unit() {
+  local src="$1"
+  local name dst
+  name="$(basename "$src")"
+  dst="$SYSTEMD_USER_DIR/$name"
+  # If something is already in place pointing at the right source, skip.
+  if [ -L "$dst" ] && [ "$(readlink -f "$dst")" = "$(readlink -f "$src")" ]; then
+    echo "  ✓ $name (already symlinked)"
+  else
+    # Remove any pre-existing file/symlink/copy so ln -sf can replace it.
+    rm -f "$dst"
+    ln -s "$src" "$dst"
+    echo "  + $name (symlinked)"
+  fi
+  systemctl --user enable "$name"
+  # Timers need an explicit start to schedule their next fire.
+  # `enable` alone leaves ActiveState=inactive with no NextElapseUSecRealtime.
+  # Services are oneshot; `start` on an already-active one is a no-op.
+  case "$name" in
+    *.timer) systemctl --user start "$name" ;;
+  esac
+}
+
+for unit in "$REPO_ROOT"/systemd/user/*.service \
+            "$REPO_ROOT"/systemd/system/*.service \
+            "$REPO_ROOT"/systemd/system/*.timer; do
   [ -f "$unit" ] || continue
-  cp "$unit" "$HOME/.config/systemd/user/"
-  systemctl --user enable "$(basename "$unit")"
+  enable_unit "$unit"
 done
+
+# Pick up any newly-added/renamed units. Safe to run on every restore;
+# it is a no-op when nothing changed.
+systemctl --user daemon-reload
 
 echo
 echo "Restore complete. Manual steps remaining:"
