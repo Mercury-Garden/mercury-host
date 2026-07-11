@@ -254,13 +254,13 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-09T17:08:11Z"
-  last_size_mb: 682
-  last_file_count: 26580
-  last_sha256: "44a034b6e2d1c037ab0334a1d3f79ebbe09bad0eb6a56f5501a8b8e79b8901c7"
+  last_run_at: "2026-07-11T08-00-11Z"
+  last_size_mb: 695
+  last_file_count: 26698
+  last_sha256: "7948c3599e5cb5923978c8f8d2109ddd655ce11dddb13361c112a690b221208b"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-07-09T17:08:51Z"
-  tarballs_on_disk: 6
+  last_verify_at: "2026-07-11T08-01-52Z"
+  tarballs_on_disk: 7
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via
     # `oci bv volume-backup-policy assign` from a laptop with OCI CLI; runs
@@ -438,7 +438,7 @@ projects:
     package_manager: pnpm@11.9.0
     pinned_node: 24.18.0
     expected_branch: main
-    lockfile_sha256: 08c1ac90ffa5    # capture.sh: refreshed mercury-tasks
+    lockfile_sha256: 13e0dad509cb    # capture.sh: refreshed mercury-tasks
     owns_subdomain: tasks.mercury.garden
     volta_pinned: true
 
