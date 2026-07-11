@@ -63,13 +63,13 @@
 //   codegraph    1.1.1 (use `codegraph upgrade --check`)
 
 import { execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 const HOME = homedir()
 
-// ─── Volta path resolution ─────────────────────────────────────────────────
+// ─── Volta + pnpm path resolution ─────────────────────────────────────────
 // The hermes-gateway.service runs this script under a sanitized PATH that
 // historically did NOT include ~/.volta/bin, so bare `node` / `volta` / `npm`
 // invocations resolved to the hermes-bundled toolchain (~/.hermes/node) — a
@@ -78,10 +78,22 @@ const HOME = homedir()
 // regardless of the parent process's PATH, we resolve volta's bin dir once
 // at startup and prepend it to every exec() call's environment.
 //
+// We also prepend pnpm's `configured global bin directory` (default
+// ~/.local/share/pnpm/bin). Without it, pnpm prints `[ERROR] The configured
+// global bin directory "…" is not in PATH` to STDOUT on every invocation —
+// which corrupts the JSON-line contract and silently demotes the openchamber
+// audit to `noop` (since JSON.parse throws → installed stays null → cmpVer
+// short-circuits → noop). Verified against the box on 2026-07-11: with this
+// dir on PATH, `pnpm ls -g @openchamber/web --json` returns valid JSON and
+// the audit correctly upgrades 1.13.8 → 1.15.0.
+//
 // VOLTA_HOME may be set explicitly (e.g. by the user's shell rc). Default
 // to ~/.volta. The bin dir is whatever lives at $VOLTA_HOME/bin.
+// Pnpm_HOME_DIR may be set explicitly. Default to ~/.local/share/pnpm.
 const VOLTA_HOME_DIR = process.env.VOLTA_HOME || join(HOME, '.volta')
 const VOLTA_BIN = join(VOLTA_HOME_DIR, 'bin')
+const Pnpm_HOME_DIR = process.env.Pnpm_HOME || join(HOME, '.local/share/pnpm')
+const PNPM_BIN = join(Pnpm_HOME_DIR, 'bin')
 
 // ─── JSON-line output ──────────────────────────────────────────────────────
 // The cron prompt reads stdout line-delimited. Keep this line shape stable.
@@ -111,13 +123,20 @@ const exec = (cmd: string, opts: { timeout?: number; env?: NodeJS.ProcessEnv } =
   // Always run with VOLTA_BIN at the front of PATH so bare `node` / `npm` /
   // `pnpm` / `volta` invocations resolve to the user-managed toolchain even
   // when the parent process's PATH (e.g. hermes-gateway.service) does not
-  // include it. We also propagate VOLTA_HOME in case the child process
-  // shells out further.
+  // include it. We also prepend PNPM_BIN so pnpm does not print
+  // `[ERROR] The configured global bin directory "…" is not in PATH` to
+  // stdout on every invocation (that non-JSON line corrupts the JSON-line
+  // contract used by the openchamber audit — pitfall #14). We propagate
+  // VOLTA_HOME in case the child process shells out further.
   const basePath = process.env.PATH || ''
+  // Prepend in priority order: volta bin first (so `node`/`npm` from volta
+  // win), then pnpm bin (so pnpm's self-check on its configured bin dir
+  // passes), then whatever the parent supplied.
+  const pnpmPrefix = existsSync(PNPM_BIN) ? `${PNPM_BIN}:` : ''
   const env = {
     ...process.env,
     VOLTA_HOME: VOLTA_HOME_DIR,
-    PATH: `${VOLTA_BIN}:${basePath}`,
+    PATH: `${VOLTA_BIN}:${pnpmPrefix}${basePath}`,
     ...(opts.env || {}),
   } as NodeJS.ProcessEnv
   return execSync(cmd, {
@@ -176,6 +195,55 @@ const locateInstalledVersion = (pkg: string): string | null => {
   if (v2) return v2
   const ocInner = join(HOME, '.cache/opencode/packages', pkg, 'node_modules', pkg, 'package.json')
   return pkgField(ocInner, 'version')
+}
+
+// ─── Helper: read the installed version of a pnpm-global package from disk ─
+// Avoids `pnpm ls -g --json`, which is unreliable under pnpm 11.11.0 on this
+// filesystem layout (pitfall #14). The cmd-shim in `~/.local/share/pnpm/bin/<bin>`
+// has a `cmd-shim-target=...` comment line that records the install hash dir.
+// We strip `/bin/<entry>.js` from that target and read the sibling package.json.
+// Pnpm_HOME may be overridden via env (default ~/.local/share/pnpm).
+const pnpmInstalledVersion = (binName: string, pkgName?: string): string | null => {
+  const shim = join(PNPM_BIN, binName)
+  if (!existsSync(shim)) return null
+  // The shim is a shell script with a `# cmd-shim-target=<path>` trailer. Read
+  // it and parse the trailer. We tolerate the absence of the trailer (older
+  // pnpm versions, manually-edited shims) by falling back to walking the
+  // most-recently-modified hash dir under `…/global/v11/`.
+  let target: string | null = null
+  try {
+    const raw = readFileSync(shim, 'utf8')
+    const m = raw.match(/^#\s*cmd-shim-target=(.+)$/m)
+    if (m) target = m[1].trim()
+  } catch { /* */ }
+  // The target points at `<dir>/bin/<entry>.js`. Read `<dir>/package.json`.
+  const candidates: string[] = []
+  if (target) candidates.push(target.replace(/\/bin\/[^/]+$/, '/package.json'))
+  // Fallback: scan global hash dirs newest-first for the package.json
+  // matching pkgName (or binName as a fallback). This is the recovery path
+  // when the shim trailer is missing/stale. Hash dirs are content-addressed
+  // (sha-prefix + counter), so lexicographic sort by name is a stable proxy
+  // for "most-recent install" — newer installs append, never replace.
+  const globalRoot = join(PNPM_BIN.replace(/\/bin$/, ''), 'global/v11')
+  if (existsSync(globalRoot)) {
+    let dirs: string[] = []
+    try {
+      dirs = readdirSync(globalRoot, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && /^[0-9a-f]+-/.test(d.name))
+        .map((d) => d.name)
+        .sort((a, b) => b.localeCompare(a))
+    } catch { /* */ }
+    const wanted = pkgName ?? binName
+    for (const d of dirs) {
+      const pj = join(globalRoot, d, 'node_modules', wanted, 'package.json')
+      if (existsSync(pj)) candidates.push(pj)
+    }
+  }
+  for (const c of candidates) {
+    const v = pkgField(c, 'version')
+    if (v) return v
+  }
+  return null
 }
 
 // ─── Helper: latest version from npm registry (Node 22+ has native fetch) ─
@@ -342,15 +410,14 @@ async function auditOpencode(): Promise<void> {
 
 // ─── Tool: openchamber (@openchamber/web via pnpm) ─────────────────────────
 async function auditOpenchamber(): Promise<void> {
-  // openchamber is a pnpm global install. Find its installed version by
-  // walking the symlink store, like `pnpm ls -g` does.
-  let installed: string | null = null
-  try {
-    const r = exec('pnpm ls -g @openchamber/web --depth=0 --json', { timeout: 30_000 })
-    const j = JSON.parse(r)
-    const dep = (j?.[0]?.dependencies ?? {})['@openchamber/web']?.version ?? null
-    installed = dep
-  } catch { /* registry shape changed — fall through */ }
+  // openchamber is a pnpm-global install. We deliberately do NOT use
+  // `pnpm ls -g --json` to read the installed version — under pnpm 11.11.0
+  // on this filesystem (`~/.local/share` is itself a symlink to the data
+  // volume), the global-install index is unreliable (pitfall #14 Layer C).
+  // Instead, parse the cmd-shim's `# cmd-shim-target=` trailer to find the
+  // install hash dir, and read its sibling package.json. Fallback: walk the
+  // hash dirs newest-first.
+  const installed = pnpmInstalledVersion('openchamber', '@openchamber/web')
   const latest = await npmLatest('@openchamber/web')
   if (!latest) {
     emit({ tool: 'openchamber', installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' })
@@ -365,10 +432,9 @@ async function auditOpenchamber(): Promise<void> {
   let after: string | null = null
   try {
     const r = await timed(() => Promise.resolve().then(() => pnpmGlobalUpgrade('@openchamber/web')))
-    try {
-      const r2 = exec('pnpm ls -g @openchamber/web --depth=0 --json', { timeout: 30_000 })
-      after = JSON.parse(r2)?.[0]?.dependencies?.['@openchamber/web']?.version ?? null
-    } catch { /* */ }
+    // Re-read via the same shim path — `pnpm add -g` regenerates the shim
+    // trailer to point at the new install dir.
+    after = pnpmInstalledVersion('openchamber', '@openchamber/web')
     emit({ tool: 'openchamber', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: r.err })
   } finally {
     try { startOpenchamber() } catch { /* */ }
