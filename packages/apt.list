@@ -7,6 +7,7 @@ base-files
 bash
 bsdutils
 build-essential
+ccache
 certbot
 chromium-browser
 cloud-init
@@ -31,11 +32,13 @@ libwrap0
 linux-base
 linux-oracle
 login
+mold
 ncurses-base
 ncurses-bin
 ncurses-term
 nfs-common
 nginx
+ninja-build
 open-iscsi
 openssh-server
 openssh-sftp-server

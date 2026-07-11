@@ -11,32 +11,32 @@ node_managers:
     home: ~/.volta
     default_node: 24.18.0
     default_npm: 11.17.0
-    default_pnpm: 11.10.0
+    default_pnpm: 11.11.0
     cached_runtimes:
       - 24.14.1   # stale; not in current volta cache
       - 24.16.0   # stale; not in current volta cache
       - 24.18.0   # stale; not in current volta cache
     globally_pinned_packages:
       - name: "@colbymchenry/codegraph"
-        version: 1.2.0
+        version: 1.4.1
         node: 24.18.0
       - name: "@fission-ai/openspec"
-        version: 1.5.0
+        version: 1.6.0
         node: 24.18.0
       - name: "@plannotator/opencode"
-        version: 0.21.4
+        version: 0.23.0
         node: 24.18.0
       - name: context-mode
         version: 1.0.169
         node: 24.18.0
       - name: opencode-ai
-        version: 1.17.13
+        version: 1.17.18
         node: 24.18.0
       - name: openwiki
         version: 0.0.3
         node: 24.18.0
       - name: pnpm
-        version: 11.10.0
+        version: 11.11.0
         node: 24.18.0
 
   hermes_bundled:
