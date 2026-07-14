@@ -49,11 +49,12 @@ jobs:
           bash scripts/audit.sh || true
 
   secrets-test:
-    # Runs scripts/test-secrets-backup-restore.sh — the round-trip harness
-    # for the auto-discover backup + per-file restore feature (PR #31).
-    # Label-gated so it doesn't run on every PR. The harness is hermetic
-    # (synthetic $HOME under mktemp -d, no real secrets) so it's safe to
-    # run anywhere.
+    # Runs scripts/test-secrets-backup-restore.sh and
+    # scripts/test-capture-path-trap.sh — the round-trip harnesses for
+    # auto-discovered secret backup/restore (PR #31) and the capture.sh
+    # PATH-trap fix (PR #56, fix/capture-path-trap). Label-gated so they
+    # don't run on every PR. Both harnesses are hermetic (synthetic $HOME
+    # under mktemp -d, no real secrets) so they're safe to run anywhere.
     runs-on: ubuntu-24.04
     if: contains(github.event.pull_request.labels.*.name, 'secrets-test')
     steps:
@@ -67,3 +68,7 @@ jobs:
       - name: run secrets backup/restore round-trip test
         run: |
           bash scripts/test-secrets-backup-restore.sh --verbose
+
+      - name: run capture.sh PATH-trap regression test
+        run: |
+          bash scripts/test-capture-path-trap.sh --verbose

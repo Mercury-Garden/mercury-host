@@ -19,11 +19,36 @@
 #   - packages/node.yaml path_order_required — aspirational PATH order, not a snapshot
 #   - packages/node.yaml projects[] block   — duplicate of inventory.yaml; removed
 #   - network/vcn-topology.md     — hand-written Oracle VCN reference, manually updated
+#
+# IMPORTANT: capture.sh shells out to `volta` (and pnpm) via subprocess. If the
+# parent shell doesn't have ~/.volta/bin on PATH — e.g. running under hermes-
+# gateway.service (pitfall #11), under a CI runner with a sanitized PATH, or
+# from any subprocess context that doesn't inherit the user's interactive
+# shell — the `volta` invocation fails with FileNotFoundError and the script
+# silently captures `globally_pinned_packages: 0`, nuking the real entries.
+# audit.sh already guards this with USER_SHELL_LOADED (sourcing ~/.zshrc to
+# reconstruct the user's real PATH). capture.sh does the same here.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT" || exit 1
+
+# Try to reconstruct the user's real PATH. Mirrors the same guard in
+# scripts/audit.sh so both scripts see the same toolchain when invoked from a
+# service / CI / hermes-gateway context. The env var is a one-shot guard so
+# this block is idempotent if capture.sh ever sources another script.
+if [ -z "${USER_SHELL_LOADED:-}" ]; then
+  if [ -f "$HOME/.zshrc" ] && command -v zsh >/dev/null 2>&1; then
+    USER_PATH=$(zsh -i -c 'echo $PATH' 2>/dev/null | tail -1)
+  elif [ -f "$HOME/.bashrc" ]; then
+    USER_PATH=$(bash -i -c 'echo $PATH' 2>/dev/null | tail -1)
+  fi
+  if [ -n "${USER_PATH:-}" ]; then
+    export PATH="$USER_PATH"
+  fi
+  export USER_SHELL_LOADED=1
+fi
 
 note() { printf '  %s\n' "$*"; }
 
@@ -244,14 +269,48 @@ PYEOF
 echo
 echo "[node]"
 python3 - <<'PYEOF'
-import pathlib, re, subprocess
+import os, pathlib, re, subprocess
 
 node_path = pathlib.Path('packages/node.yaml')
 text = node_path.read_text()
 
+# Defensive PATH prepend for the subprocesses below. Mirrors the pattern in
+# scripts/devtools-upgrade.ts exec() helper (which prepends VOLTA_BIN +
+# PNPM_BIN ahead of whatever the parent supplied). Required for hermes-
+# gateway.service and CI runners that sanitize PATH. The bash-level
+# USER_SHELL_LOADED guard at the top of capture.sh handles the parent
+# shell; this handles the python3 subprocess inside.
+#
+# Try multiple candidate locations for volta + pnpm bin dirs because
+# subprocess env's HOME may not match the user's real HOME (hermes-gateway
+# subprocess inherits a different $HOME in some cases, CI runners often
+# set $HOME=/tmp/<id>). The first one that exists wins.
+_subprocess_env = os.environ.copy()
+_user_home = os.path.expanduser('~')
+_volta_candidates = [
+    os.environ.get('VOLTA_HOME', '').rstrip('/') + '/bin' if os.environ.get('VOLTA_HOME') else None,
+    f'{_user_home}/.volta/bin',
+    '/home/ubuntu/.volta/bin',  # mercury host default; harmless on other hosts
+]
+_pnpm_candidates = [
+    os.environ.get('PNPM_HOME', '').rstrip('/') + '/bin' if os.environ.get('PNPM_HOME') else None,
+    f'{_user_home}/.local/share/pnpm/bin',
+    '/home/ubuntu/.local/share/pnpm/bin',  # mercury host default
+]
+for cand in _volta_candidates:
+    if cand and os.path.isdir(cand):
+        _subprocess_env['PATH'] = cand + ':' + _subprocess_env.get('PATH', '')
+        break
+for cand in _pnpm_candidates:
+    if cand and os.path.isdir(cand):
+        _subprocess_env['PATH'] = cand + ':' + _subprocess_env['PATH']
+        break
+
 # ── default_node / default_npm / default_pnpm ─────────────────────────
 try:
-    volta_out = subprocess.check_output(['volta', 'list', 'all'], text=True).splitlines()
+    volta_out = subprocess.check_output(
+        ['volta', 'list', 'all'], text=True, env=_subprocess_env
+    ).splitlines()
 except (subprocess.CalledProcessError, FileNotFoundError):
     volta_out = []
 
