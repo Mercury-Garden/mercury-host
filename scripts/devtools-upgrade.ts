@@ -63,7 +63,7 @@
 //   codegraph    1.1.1 (use `codegraph upgrade --check`)
 
 import { execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync, lstatSync, readlinkSync, symlinkSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -355,9 +355,18 @@ const newestPnpmHashDir = (): string | null => {
 // hash-dir (not just the canonical one) because the canonical install may
 // roll forward between calls. Safe to re-run — already-absolute symlinks
 // are skipped.
+//
+// CRITICAL: we use lstatSync (not existsSync) to detect the symlink. Node's
+// existsSync FOLLOWS symlinks and returns false on a broken one, which
+// would silently skip exactly the symlinks we came here to fix. lstat
+// returns the symlink's own metadata (no follow), so it returns truthy for
+// any present symlink regardless of whether its target resolves. Captured
+// 2026-07-14 during the watchdog integration test for fix/cron-openchamber-
+// watchdog: existsSync returned false on a deliberately-broken symlink,
+// resulting in scanned: 0 / repaired: 0 and no repair.
 const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: number } => {
   const root = pnpmGlobalRoot()
-  if (!existsSync(root)) return { repaired: 0, scanned: 0 }
+  if (!lstatSync(root, { throwIfNoEntry: false })) return { repaired: 0, scanned: 0 }
   let dirs: string[] = []
   try {
     dirs = readdirSync(root, { withFileTypes: true })
@@ -368,11 +377,13 @@ const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: numbe
   let scanned = 0
   for (const d of dirs) {
     const href = join(root, d, 'node_modules', pkgPath)
-    if (!existsSync(href)) continue
+    // lstat does not follow symlinks — a broken symlink still returns
+    // truthy here (which is what we want; those are the ones to repair).
+    let st: Stats | null = null
+    try { st = lstatSync(href) } catch { continue }
+    if (!st.isSymbolicLink()) continue
     let raw: string | null = null
-    try {
-      raw = readlinkSync(href)
-    } catch { continue }
+    try { raw = readlinkSync(href) } catch { continue }
     scanned++
     if (raw.startsWith('/')) continue   // already absolute
     // Convert `../../../../../../../data/<rest>` → `/home/ubuntu/data/<rest>`.
@@ -381,7 +392,7 @@ const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: numbe
     const m = raw.match(/data\/(.+)$/)
     if (!m) continue
     const absTarget = `/home/ubuntu/data/${m[1]}`
-    if (!existsSync(join(absTarget, 'package.json'))) continue
+    if (!lstatSync(join(absTarget, 'package.json'), { throwIfNoEntry: false })) continue
     try {
       unlinkSync(href)
       symlinkSync(absTarget, href)
@@ -492,6 +503,53 @@ const startOpenchamber = (): string => {
   return 'started'
 }
 
+// ─── Health-check + auto-repair: openchamber.service post-upgrade ──────────
+// Captured on 2026-07-14: a successful `pnpm add -g @openchamber/web@<ver>`
+// install can leave the service in `activating (auto-restart)` because pnpm
+// 11.11.0 generates relative `@<scope>/<pkg>` symlinks with off-by-one `../`
+// depth when the parent dir (`~/.local/share`) is itself a symlink into the
+// data volume (pitfall #14 Layer B). The cmd-shim points at the new install,
+// but the path it walks through is broken, so cli.js can't be required →
+// service exits 1 every 2s.
+//
+// Without this watchdog, the cron reports `action:"failed"` even though the
+// install SUCCEEDED — just the post-install state is unusable. With it, the
+// cron converts that into a transparent auto-repair and the user only sees a
+// one-line note in the JSON's `error` field.
+//
+// Design choices:
+//   - Runs ONLY after a successful upgrade (r.err === null). A failed
+//     upgrade may have left a half-written hash-dir; absolute-symlink
+//     repair against an incomplete install would be unsafe.
+//   - Always idempotent. Already-absolute symlinks are skipped. A healthy
+//     install goes through both helpers in <50ms and changes nothing.
+//   - systemd exit-code semantics are NOT errors: 0 = active, 3 = inactive,
+//     4 = no such unit. We capture stdout/stderr regardless and decode.
+//   - Graceful degradation: if systemctl isn't on PATH (CI container, weird
+//     chroot), we log to error and skip the repair — don't false-alarm.
+const openchamberHealthcheck = (): { active: boolean; subState: string; raw: string } => {
+  let raw = ''
+  try {
+    raw = exec(`systemctl --user is-active openchamber.service 2>&1 || true`, { timeout: 10_000 })
+  } catch (e) {
+    // systemctl missing entirely (no init, container without --user, etc.)
+    return { active: false, subState: 'unreachable', raw: e instanceof Error ? e.message : String(e) }
+  }
+  const subState = (raw || '').trim()
+  return { active: subState === 'active', subState, raw }
+}
+// Convert any broken relative `@openchamber/web` symlinks under every
+// hash-dir to absolute ones, repoint the cmd-shim to the canonical hash,
+// and (re)start the service. Returns the auto-repair telemetry so the
+// audit function can attach it to the JSON line's error annotation.
+const autoRepairOpenchamber = (): { repaired: number; scanned: number; shimRepointed: boolean; restartOk: boolean } => {
+  const repaired = repairPnpmSymlinks('@openchamber/web')
+  const canonical = repointPnpmCmdShim('openchamber', '@openchamber/web')
+  let restartOk = false
+  try { startOpenchamber(); restartOk = true } catch { /* leave as-is */ }
+  return { repaired: repaired.repaired, scanned: repaired.scanned, shimRepointed: canonical !== null, restartOk }
+}
+
 // ─── Tool: opencode-ai ─────────────────────────────────────────────────────
 async function auditOpencode(): Promise<void> {
   const installed = locateInstalledVersion('opencode-ai')
@@ -511,7 +569,24 @@ async function auditOpencode(): Promise<void> {
   try {
     r = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade('opencode-ai')))
     const after = locateInstalledVersion('opencode-ai')
-    emit({ tool: 'opencode-ai', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: r.err })
+    // Post-restart health-check: opencode-ai upgrades also touch openchamber
+    // (it hosts an opencode-gate subprocess). If the restart didn't bring
+    // openchamber back up, run the watchdog (symlink repair + restart).
+    let errMsg: string | null = r.err
+    if (!r.err) {
+      const hc = openchamberHealthcheck()
+      if (!hc.active && hc.subState !== 'unreachable') {
+        const repair = autoRepairOpenchamber()
+        execSync('sleep 3', { encoding: 'utf8' })
+        const hc2 = openchamberHealthcheck()
+        if (hc2.active) {
+          errMsg = `openchamber auto-repaired after opencode upgrade (was ${hc.subState}, fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})`
+        } else {
+          errMsg = `openchamber still ${hc2.subState} after auto-repair (fixed ${repair.repaired}/${repair.scanned} symlinks); manual intervention required`
+        }
+      }
+    }
+    emit({ tool: 'opencode-ai', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: errMsg })
   } finally {
     // Always restart openchamber — even on upgrade failure — so we don't
     // leave the box without the web UI after a failed tick.
@@ -555,7 +630,33 @@ async function auditOpenchamber(): Promise<void> {
     // Repoint the shim to whichever hash-dir is currently the newest.
     repointPnpmCmdShim('openchamber', '@openchamber/web')
     after = pnpmInstalledVersion('openchamber', '@openchamber/web')
-    const errMsg = r.err ? `${r.err}${pre.repaired > 0 ? ` (also repaired ${pre.repaired}/${pre.scanned} broken symlinks pre-install)` : ''}` : null
+    // Post-upgrade health-check + auto-repair watchdog (see openchamberHealthcheck
+    // doc-block above). Only runs when the install reported success — a failed
+    // install may have left an incomplete hash-dir that absolute-symlink repair
+    // against would be unsafe. We classify the outcome as `upgraded` (the install
+    // did succeed; the watchdog healed the post-install symptom) so the cron
+    // doesn't accumulate bogus `failed` reports on a class of failure the box
+    // can heal itself.
+    let errMsg: string | null = null
+    if (r.err) {
+      errMsg = `${r.err}${pre.repaired > 0 ? ` (also repaired ${pre.repaired}/${pre.scanned} broken symlinks pre-install)` : ''}`
+    } else {
+      const hc = openchamberHealthcheck()
+      if (!hc.active && hc.subState !== 'unreachable') {
+        // Install succeeded but the service didn't come up cleanly. Run the
+        // recovery loop and re-check.
+        const repair = autoRepairOpenchamber()
+        // Brief settle so systemd re-evaluates the unit before the next probe.
+        execSync('sleep 3', { encoding: 'utf8' })
+        const hc2 = openchamberHealthcheck()
+        if (hc2.active) {
+          errMsg = `auto-repaired post-install: service was ${hc.subState} → now active (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})`
+        } else {
+          // Repair didn't bring it back. Report as failed with full diagnostic.
+          errMsg = `install OK but service still ${hc2.subState} after auto-repair (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''}); manual intervention required`
+        }
+      }
+    }
     emit({ tool: 'openchamber', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: errMsg })
   } finally {
     try { startOpenchamber() } catch { /* */ }
