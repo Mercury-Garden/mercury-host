@@ -98,6 +98,20 @@ BACKUP_PATHS=(
     /home/ubuntu/data/code/x-digest/.env
     /home/ubuntu/data/code/scriptcaster/.env
     /home/ubuntu/.config/openchamber/startup.env
+    # ── Ollama user state (added 2026-07-14) ──────────────────────────────
+    # 28 KB total. ~/.ollama/id_ed25519 is the ollama-cloud auth key
+    # (different from ~/.ssh/id_ed25519); ~/.ollama/config.json holds
+    # last_selection prefs. The ollama MODELS (blobs) are NOT here —
+    # they live under /usr/share/ollama/.ollama/models when ollama is
+    # installed system-wide, or under ~/.ollama/models as user-local
+    # manifest refs. We capture what we can; see inventory.yaml →
+    # state_backup.intentional_excludes for the .sqlite exclusion.
+    /home/ubuntu/.ollama
+    # ── OpenWiki .env (added 2026-07-14) ──────────────────────────────────
+    # The API key IS captured by backup-secrets.sh (openwiki_env b64 block).
+    # Capturing it here too means a daily tarball alone is sufficient to
+    # restore openwiki state without needing the secrets round-trip.
+    /home/ubuntu/.openwiki/.env
 )
 
 # /etc/nginx + /etc/letsencrypt contain root-only files. The nginx tree has
@@ -345,17 +359,64 @@ EOF
 
 log "manifest written: ${MANIFEST}"
 
-# ----- 8. integrity check — sample 5 random files, restore + diff -----
-log "running integrity check (5 random files)"
+# ----- 8. integrity check — sample 5 files (1 privileged + 4 random) -----
+# Random sampling alone skews heavily toward the bulk of the archive
+# (~97% of files live under ~/.hermes/hermes-agent/). With 30K files
+# dominated by python venv + tests + skills, a random 5-file sample
+# never hits the privileged paths that are actually irreplaceable
+# (.ssh, /etc/nginx, .env files). Verified 2026-07-14: all 5 of today's
+# samples landed in ~/.hermes, telling us nothing about the 3% that
+# matters. Pin one sample to the privileged subset and fill the rest
+# randomly, excluding any path overlap with the pinned sample.
+log "running integrity check (1 privileged + 4 random files)"
 TMP_VERIFY="${TMP_DIR}/verify"
 mkdir -p "${TMP_VERIFY}"
 
-# Pick 5 regular files from the manifest (skip dirs/symlinks)
+# Privileged paths — these are the irreplaceable subset. If any of
+# these is missing or byte-mismatched, the backup is broken in a way
+# that matters; the random samples are just broader coverage.
+PRIVILEGED_PATHS=(
+    "home/ubuntu/.ssh/id_ed25519"
+    "home/ubuntu/.ssh/authorized_keys"
+    "home/ubuntu/.gnupg/sshcontrol"
+    "home/ubuntu/data/code/mercury-host/inventory.yaml"
+    "home/ubuntu/.config/openchamber/startup.env"
+    "home/ubuntu/data/code/x-digest/.env"
+    "home/ubuntu/data/code/scriptcaster/.env"
+    "home/ubuntu/.openwiki/.env"
+    "home/ubuntu/.ollama/id_ed25519"
+    "etc/nginx/sites-available/webhook.mercury.garden.conf"
+    "etc/nginx/snippets/oauth2-proxy-auth.conf"
+)
+
+# Pick one privileged file that actually exists in the archive.
+# Iterate the list deterministically so today's run reports the same
+# privileged sample if rerun (shuf on the privileged set would make
+# reruns non-reproducible — pick first existing).
+PINNED=""
+for cand in "${PRIVILEGED_PATHS[@]}"; do
+    if tar -I zstd -tf "${TARBALL}" 2>/dev/null | grep -qx "${cand}"; then
+        PINNED="${cand}"
+        break
+    fi
+done
+
+if [ -z "${PINNED}" ]; then
+    log "WARN: no privileged paths present in archive — random-only mode"
+fi
+
+# Random samples: 4 regular files from the archive, excluding the pinned path.
 mapfile -t CANDIDATES < <(
     tar -I zstd -tvf "${TARBALL}" 2>/dev/null \
     | awk '$1 ~ /^-/ && $NF !~ /\/$/ {print $NF}' \
-    | shuf -n 5
+    | grep -v -F "${PINNED}" \
+    | shuf -n 4
 )
+
+# Prepend the pinned sample so it is verified first.
+if [ -n "${PINNED}" ]; then
+    CANDIDATES=("${PINNED}" "${CANDIDATES[@]}")
+fi
 
 VERIFY_OK=0
 VERIFY_FAIL=0

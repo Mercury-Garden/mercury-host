@@ -112,6 +112,7 @@ catches most issues before push.
   the second pass invisible to `tar -I zstd -tf` / `tar -I zstd -xf`.
   The ACME account `private_key.json` is explicitly excluded from pass 2
   (regenerable via `certbot register --replace`; no DR value).
+- **`backup-mercury-state.sh` integrity check is 1-pinned + 4-random, not 5-random.** Random-only sampling was dominated by `~/.hermes/hermes-agent/` (~97% of archive entries are python venv + tests + skills) — verified 2026-07-14 that all 5 of one day's samples landed in `~/.hermes`, telling us nothing about the 3% that matters. The pinned-sample list (PRIVILEGED_PATHS in the script) covers SSH, GPG, nginx vhosts/snippets, project `.env` files, ollama cloud auth, openwiki key, and mercury-host's own inventory.yaml — the irreplaceable subset. If none of those exist in the archive (catastrophic drift), the sampler logs a WARN and falls back to all-random.
 - **`audit.sh` checks two things for system services: enabled AND
   active (in separate sections).** The `[systemd-system]` section only
   checks `is-enabled`. A separate `[active-services]` section checks

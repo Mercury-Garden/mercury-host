@@ -196,7 +196,7 @@ jq -r '.files[] | "\(.size)\t.path"' /home/ubuntu/data/backups/mercury-state-*.m
 bash scripts/backup-mercury-state.sh
 ```
 
-A green verify JSON means 5 random files were extracted and diff'd against the live source with byte-identical results.
+A green verify JSON means 5 files were extracted and diff'd against the live source with byte-identical results: 1 pinned to a privileged-path list (`.ssh`, `/etc/nginx`, `.env`, ollama cloud auth, mercury-host inventory.yaml) and 4 random picks from the rest. The pinning exists because random-only sampling is dominated by `~/.hermes/hermes-agent/` (~97% of archive entries), so without the pin all 5 samples tend to land there and the verify result tells us nothing about the 3% that's actually irreplaceable.
 
 ### Schedule, retention, logs
 
