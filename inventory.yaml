@@ -254,12 +254,12 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-11T08-00-11Z"
-  last_size_mb: 695
-  last_file_count: 26698
-  last_sha256: "7948c3599e5cb5923978c8f8d2109ddd655ce11dddb13361c112a690b221208b"
+  last_run_at: "2026-07-14T08-00-31Z"
+  last_size_mb: 713
+  last_file_count: 26754
+  last_sha256: "e1b0fca7c53446b1b23126960731305b6b130532c13f7b2c5980070f6948c8a5"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-07-11T08-01-52Z"
+  last_verify_at: "2026-07-14T08-03-43Z"
   tarballs_on_disk: 7
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via

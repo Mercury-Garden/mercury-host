@@ -5,8 +5,8 @@
 
 apps:
   - name: chromium
-    version: 150.0.7871.46
-    revision: "3482"
+    version: 150.0.7871.100
+    revision: "3488"
     channel: latest/stable
     publisher: canonical**
     classic: false
