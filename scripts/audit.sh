@@ -637,6 +637,66 @@ if last_run and last_run != 'null':
 else:
     print(f"  ! last_run_at not set — running capture.sh will populate it")
 
+# 2b. Gap detection — flag a missing day anywhere in the last N days,
+# not just staleness on the latest. The freshness check above covers
+# "is the latest backup recent"; this check covers "did every day get
+# a backup". A gap in the chain is silent in the freshness view
+# because as long as *some* backup is fresh, the freshness check
+# passes. Discovered the failure mode on 2026-07-14 when Jul 8 was
+# missing from a chain that otherwise looked healthy.
+#
+# Logic: enumerate the dates encoded in tarball filenames
+# (mercury-state-YYYY-MM-DD.tar.zst) for the last `gap_check_days`
+# days. If any date in that window has no tarball, that's a gap.
+# known_gaps from inventory.yaml's state_backup block are excluded
+# so historical gaps don't trip the check forever.
+#
+# Default window: 7 days (matches retention_count). Configurable via
+# `state_backup.gap_check_days` in inventory.yaml; absent = 7.
+gap_check_days = 7
+m_gc = re.search(r'^  gap_check_days:\s*(\d+)', block, re.MULTILINE)
+if m_gc:
+    try:
+        gap_check_days = int(m_gc.group(1))
+    except ValueError:
+        pass
+
+# Pull known_gaps from inventory (dates the audit should ignore)
+known_gap_dates = set()
+m_kg = re.search(r'^  known_gaps:\n((?:    - [^\n]*\n(?:      [^\n]*\n)*)+)', block, re.MULTILINE)
+if m_kg:
+    for line in m_kg.group(1).splitlines():
+        m_date = re.search(r'^\s+- date:\s*"([^"]+)"', line)
+        if m_date:
+            known_gap_dates.add(m_date.group(1))
+
+# Build the set of tarball dates on disk
+tarball_dates = set()
+for tb in tarballs:
+    m_d = re.match(r'mercury-state-(\d{4}-\d{2}-\d{2})\.tar\.zst$', tb.name)
+    if m_d:
+        tarball_dates.add(m_d.group(1))
+
+# Compute the window: last N days from today (UTC). Backup timestamps
+# are UTC (the script uses `date -u`); matching by UTC date avoids
+# TZ-edge false positives around Bogota midnight.
+today = datetime.datetime.now(datetime.timezone.utc).date()
+missing = []
+for offset in range(gap_check_days):
+    d = today - datetime.timedelta(days=offset)
+    d_str = d.isoformat()
+    if d_str not in tarball_dates and d_str not in known_gap_dates:
+        missing.append(d_str)
+
+if missing:
+    # Sort newest-first for readability
+    missing_sorted = sorted(missing, reverse=True)
+    for d in missing_sorted:
+        print(f"  ✗ DRIFT: no backup for {d} (in last {gap_check_days} days)")
+        drift += 1
+else:
+    print(f"  ✓ gap-check: every day in the last {gap_check_days}d has a backup")
+
 # 3. Systemd timer is enabled + scheduled
 #
 # We can't trust `systemctl show UnitFileState=enabled` alone — that field
