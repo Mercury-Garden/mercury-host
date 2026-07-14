@@ -151,6 +151,33 @@ done
 systemctl --user daemon-reload
 
 echo
+echo "[systemd] disabling legacy system-level backup unit (if present)"
+# Pre-PR-#59 setup created a duplicate of mercury-state-backup.{timer,service}
+# in /etc/systemd/system/ (system manager) AND ~/.config/systemd/user/
+# (user manager). The user-manager copy is the live source of truth and
+# the one this script symlinks; the system-manager copy is a legacy
+# artifact from the initial 2026-06-30 bootstrap. Disable + remove it
+# so we have exactly one unit per concern. Idempotent: if it's already
+# gone, the step prints nothing and moves on. (Discovered 2026-07-14
+# while tracing the Jul 8 backup gap — the system-level unit's
+# Persistent=true catch-up race was the root cause hypothesis.)
+LEGACY_BACKUP_UNITS=(
+    /etc/systemd/system/mercury-state-backup.service
+    /etc/systemd/system/mercury-state-backup.timer
+)
+for legacy in "${LEGACY_BACKUP_UNITS[@]}"; do
+    if [ -L "$legacy" ] || [ -f "$legacy" ]; then
+        unit_name="$(basename "$legacy")"
+        if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo -n systemctl disable --now "$unit_name" 2>/dev/null || true
+            sudo -n rm -f "$legacy"
+            echo "  - removed legacy system-level $unit_name"
+        else
+            echo "  ! found $legacy but no NOPASSWD sudo — leave for manual cleanup"
+        fi
+    fi
+done
+
 echo "Restore complete. Manual steps remaining:"
 echo "  - copy nginx/sites-available/* to /etc/nginx/sites-available/"
 echo "  - sudo ln -s /etc/nginx/sites-available/<vhost> /etc/nginx/sites-enabled/"
