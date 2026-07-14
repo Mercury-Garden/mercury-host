@@ -288,13 +288,13 @@ state_backup:
       path: /etc/systemd/system/mercury-state-backup.timer
       enabled_at: "2026-06-30T14:32:30-05:00"
       last_successful_run: "2026-07-07T11:28:15-05:00"
-      current_state: "inactive (dead) since 2026-07-11 reboot"
-      action: "remove on next restore.sh (PR #59)"
+      current_state: "removed 2026-07-14 — was inactive (dead) since 2026-07-11 reboot"
+      action: "done — disabled + symlink deleted from /etc/systemd/system/"
     user_level_unit:
       path: /home/ubuntu/.config/systemd/user/mercury-state-backup.timer
       enabled_at: "2026-07-09T11:29:17-05:00"
       first_run: "2026-07-09T11:19:16-05:00"
-      current_state: "active (waiting), 03:00 Bogota daily"
+      current_state: "active (waiting), 03:00 Bogota daily — sole owner of the schedule"
       action: "keep — this is the source of truth"
   # ── Known gap: Jul 8 2026 backup missing ──────────────────────────────
   # Between Jul 7 11:28 (last system-level run) and Jul 9 11:29 (user-level
