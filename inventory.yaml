@@ -261,6 +261,58 @@ state_backup:
   last_verify_ok: "5/5"
   last_verify_at: "2026-07-14T08-03-43Z"
   tarballs_on_disk: 7
+  # ── Backup unit duplication history (resolved 2026-07-14) ────────────────
+  # Two `mercury-state-backup.{timer,service}` units exist on this host,
+  # both pointing at the same repo files:
+  #   (a) /etc/systemd/system/...                 — system-level, enabled
+  #                                                 2026-06-30 14:32. Last
+  #                                                 successful run: Jul 7
+  #                                                 11:28 Bogota. Went
+  #                                                 inactive Jul 11 reboot
+  #                                                 and has not been
+  #                                                 re-armed.
+  #   (b) ~/.config/systemd/user/...             — user-level, enabled
+  #                                                 2026-07-09 11:29
+  #                                                 (workaround set up
+  #                                                 when the system-level
+  #                                                 unit stopped firing).
+  #                                                 Runs cleanly 03:00
+  #                                                 Bogota since Jul 12.
+  # The user-level unit is the one that has been doing the real work since
+  # 2026-07-09. The system-level unit is a legacy artifact and should be
+  # disabled + removed by restore.sh on the next fresh bootstrap (PR #59).
+  # `audit.sh` checks the user-level unit (the live one); the system-level
+  # unit is invisible to the audit's enablement checks.
+  unit_duplication:
+    system_level_unit:
+      path: /etc/systemd/system/mercury-state-backup.timer
+      enabled_at: "2026-06-30T14:32:30-05:00"
+      last_successful_run: "2026-07-07T11:28:15-05:00"
+      current_state: "inactive (dead) since 2026-07-11 reboot"
+      action: "remove on next restore.sh (PR #59)"
+    user_level_unit:
+      path: /home/ubuntu/.config/systemd/user/mercury-state-backup.timer
+      enabled_at: "2026-07-09T11:29:17-05:00"
+      first_run: "2026-07-09T11:19:16-05:00"
+      current_state: "active (waiting), 03:00 Bogota daily"
+      action: "keep — this is the source of truth"
+  # ── Known gap: Jul 8 2026 backup missing ──────────────────────────────
+  # Between Jul 7 11:28 (last system-level run) and Jul 9 11:29 (user-level
+  # unit enabled), the 03:00 Bogota timer on Jul 8 did not produce a
+  # tarball. Root cause not fully diagnosed without OCI control plane
+  # access, but the working hypothesis is: the system-level unit's
+  # Persistent=true catch-up had already fired at 11:28 Jul 7 (8 hours late
+  # vs the 03:00 schedule), and the next scheduled fire on Jul 8 was
+  # dropped during the catch-up race window. The user-level unit was set
+  # up Jul 9 specifically to work around this.
+  #
+  # This entry exists so audit.sh's gap-check (added in PR #59) doesn't
+  # flag Jul 8 forever — once the script knows about the historical gap,
+  # it can ignore it and only alert on FUTURE gaps.
+  known_gaps:
+    - date: "2026-07-08"
+      reason: "system-level unit Persistent=true catch-up race; user-level unit installed next day as workaround"
+      resolved_by: "user-level unit now owns the schedule"
   # ── Intentional excludes from the daily tarball ────────────────────────────
   # The `BACKUP_PATHS` list in scripts/backup-mercury-state.sh enumerates
   # what IS captured. This block enumerates what is INTENTIONALLY NOT
