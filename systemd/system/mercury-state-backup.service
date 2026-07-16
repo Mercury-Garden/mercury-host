@@ -6,6 +6,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+# Refresh secrets dump before state backup so any state-side change that
+# touched a .env lands in ~/.secrets/secrets.yaml within the same 24h
+# window. --force overwrites in place (single-file, no retention).
+# Idempotent: same script + same targets, daily cadence, no growth.
+ExecStartPre=/home/ubuntu/data/code/mercury-host/scripts/backup-secrets.sh --force
 ExecStart=/home/ubuntu/data/code/mercury-host/scripts/backup-mercury-state.sh
 WorkingDirectory=/home/ubuntu
 # systemd sets HOME=/ by default for system services; scripts under set -u
