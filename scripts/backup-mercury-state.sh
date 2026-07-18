@@ -9,7 +9,8 @@
 #   - node_modules, .pnpm-store, web/dist, coverage, test-results
 #   - .git internals (code is in GitHub)
 #   - package caches (.cache, ~/.local/share/uv, ~/.cargo/registry,
-#     ~/.rustup/toolchains, ~/.npm, ~/.bun, ~/.volta)
+#     ~/.rustup/toolchains, ~/.npm, ~/.bun, ~/.local/share/mise,
+#     ~/.volta (legacy — kept until Phase 5 teardown))
 #   - secrets.yaml (separate restore path: scripts/restore-secrets.sh)
 #   - Let's Encrypt account private keys (see ELEVATED_EXCLUDES below)
 #
@@ -167,7 +168,8 @@ EXCLUDES=(
     --exclude='.local/share/uv'
     --exclude='.local/share/pnpm/store'
     --exclude='.local/share/Trash'
-    --exclude='.volta'
+    --exclude='.local/share/mise'   # rebuild by `mise install`; ~200MB; replaced .volta 2026-07-18
+    --exclude='.volta'              # legacy until Phase 5 teardown; rebuild by `volta install` if needed
     --exclude='.secrets/secrets.yaml'
     # ── User cache relocation (2026-07-05) ──────────────────────────────
     # ~/.cache and ~/.local/share are now symlinks pointing at
@@ -387,6 +389,14 @@ PRIVILEGED_PATHS=(
     "home/ubuntu/.ollama/id_ed25519"
     "etc/nginx/sites-available/webhook.mercury.garden.conf"
     "etc/nginx/snippets/oauth2-proxy-auth.conf"
+    # post-2026-07-18: verify the data-volume symlink invariant is intact.
+    # ~/.local/share is a symlink to /home/ubuntu/data/.local/share; the
+    # symlink itself IS in the backup, and we explicitly check it points
+    # at the data volume (not the boot volume). 1 of 1 symlink test —
+    # bias to a specific file in the linked tree so the sampler can't
+    # accidentally skip on symlink resolution.
+    "home/ubuntu/.local/share/mise/installs"
+    "home/ubuntu/.local/bin/mise"
 )
 
 # Pick one privileged file that actually exists in the archive.

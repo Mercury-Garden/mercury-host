@@ -376,12 +376,16 @@ state_backup:
       Block Volume backup" for the full recipe.
 
 node_managers:
-  volta:
-    install_method: https://volta.sh
-    cli_version: 2.0.2
-    home: ~/.volta
+  # Mirror of packages/node.yaml → node_managers.mise. Both files carry
+  # the same fields; packages/node.yaml is the canonical source (regenerated
+  # by capture.sh from `mise ls --installed --json`); this block is a
+  # backup inventory state and is read by audit.sh as a fallback when
+  # packages/node.yaml is unavailable. Updated 2026-07-18 (volta→mise).
+  mise:
+    install_method: https://mise.run
+    cli_version: 2026.7.7
+    home: ~/.local/share/mise
     default_node: 24.18.0
-    default_npm: 11.17.0
     default_pnpm: 11.9.0
 
   hermes_bundled:
@@ -531,7 +535,7 @@ projects:
     expected_branch: main
     lockfile_sha256: 13e0dad509cb    # capture.sh: refreshed mercury-tasks
     owns_subdomain: tasks.mercury.garden
-    volta_pinned: true
+    toolchain_pinned: true   # capture.sh: vite-fired — see packages/node.yaml#node_managers
 
   - path: ~/data/code/better-bet
     repo: Mercury-Garden/better-bet
@@ -540,7 +544,7 @@ projects:
     expected_branch: fix/pollapp-api-contract-drift   # local working branch
     lockfile_sha256: 94c13fb9894a    # capture.sh: refreshed better-bet
     owns_subdomain: null
-    volta_pinned: true
+    toolchain_pinned: true
 
   - path: ~/data/code/scriptcaster
     repo: Mercury-Garden/scriptcaster
@@ -549,7 +553,7 @@ projects:
     expected_branch: main
     lockfile_sha256: a5904bd36258    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
-    volta_pinned: true
+    toolchain_pinned: true
 
   - path: ~/data/code/webhook-server
     repo: Mercury-Garden/webhook-server
@@ -558,7 +562,7 @@ projects:
     expected_branch: fix/register-auto-arc-advance-cron-script-args
     lockfile_sha256: 292791fbfc6e    # capture.sh: refreshed webhook-server
     owns_subdomain: webhook.mercury.garden
-    volta_pinned: true
+    toolchain_pinned: true
 
   - path: ~/data/code/x-digest
     repo: Mercury-Garden/x-digest
@@ -567,20 +571,23 @@ projects:
     expected_branch: main
     lockfile_sha256: 3e4e9798a86a    # capture.sh: refreshed x-digest
     owns_subdomain: null
-    volta_pinned: true
+    toolchain_pinned: true
 
 # ── OpenWiki (LangChain repo-documentation agent) ───────────────────────
 # OpenWiki is a CLI that generates and maintains a Markdown wiki for a
 # codebase and patches AGENTS.md / CLAUDE.md to point at that wiki. On
-# mercury it runs as a volta-installed global (`packages/node.yaml →
-# globally_pinned_packages`) configured to talk to the minimax coding-plan
-# endpoint via the Anthropic-compatible surface at https://platform.minimax.io/
+# mercury it runs as a globally-installed npm tool
+# (`npm install -g openwiki`, declared per-tool in
+# scripts/devtools-upgrade.ts OPENCODE_PLUGINS / standalone CLI lists,
+# formerly `volta install openwiki` prior to the 2026-07-18 toolchain
+# migration) configured to talk to the minimax coding-plan endpoint
+# via the Anthropic-compatible surface at https://platform.minimax.io/
 # (NOT api.minimax.io — that mirror is the OpenAI-compatible surface at
 # /v1 used by Hermes fallback).
 #
 # The audit's [openwiki] section (added in the install PR) verifies:
 #  1. The openwiki CLI is on PATH (binary path tracked in
-#     packages/node.yaml via `volta list`).
+#     scripts/devtools-upgrade.ts locateInstalledVersion).
 #  2. The expected provider / model / base_url are present in
 #     ~/.openwiki/.env (presence-only checks, NEVER the key value).
 #  3. ~.openwiki/.env has mode 0600.
@@ -592,9 +599,9 @@ projects:
 openwiki:
   binary:
     expected_on_path: openwiki
-    installed_via: volta
+    installed_via: "npm install -g openwiki"   # post-2026-07-18 (was: volta install openwiki)
     pinned_to_node: 24.18.0
-    refresh: packages/node.yaml → globally_pinned_packages (capture.sh)
+    refresh: scripts/devtools-upgrade.ts (cron-managed daily upgrade)
   provider: anthropic              # matches OPENWIKI_PROVIDER in ~/.openwiki/.env
   base_url: https://api.minimax.io/anthropic   # matches ANTHROPIC_BASE_URL in ~/.openwiki/.env
   model: MiniMax-M2.7-highspeed    # matches OPENWIKI_MODEL_ID in ~/.openwiki/.env
@@ -610,13 +617,15 @@ openwiki:
     into <repo>/.github/workflows/openwiki-update.yml. Runs `openwiki --update`
     daily; produces a PR against the repo with doc refreshes.
   note: |
-    Install: `volta install openwiki` (this PR did it on 2026-07-08).
+    Install: `npm install -g openwiki` (post-2026-07-18; was `volta install
+    openwiki` originally installed 2026-07-08).
     First-run setup: `openwiki --init` (interactive — provider, key,
     model). Until the user completes --init, audit reports drift on
     `~/.openwiki/.env` (expected — that's by design here per your
     "install everything EXCEPT the key" choice).
-    Source of truth for the binary → packages/node.yaml (regenerated by
-    scripts/capture.sh from `volta list all`).
+    Source of truth for the binary → scripts/devtools-upgrade.ts cron
+    (`npm install -g openwiki`, formerly regenerated by scripts/capture.sh
+    from `volta list all`).
     Source of truth for the API key → ~/.openwiki/.env (pointed at by
     secrets/inventory.yaml → openwiki-api-key).
     See tooling/openwiki/README.md for the full setup flow + recovery.
