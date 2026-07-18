@@ -64,13 +64,13 @@ else
 fi
 
 EXPECT_NODE=$(require_yaml_field "$PKG_NODE" "default_node")
-# default_pnpm is corepack-managed per-project; fall back to "11.9.0" if absent
+# default_pnpm is corepack-managed per-project; fall back to "11.14.0" if absent
 EXPECT_PNPM=$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$PKG_NODE" 2>/dev/null)
-[ -z "$EXPECT_PNPM" ] && EXPECT_PNPM="11.9.0"
+[ -z "$EXPECT_PNPM" ] && EXPECT_PNPM="11.14.0"
 
 # `mise current --no-color` prints lines like:
 #   node    24.18.0   path: .../node/24.18.0/bin/node
-#   pnpm    11.9.0    path: .../node/24.18.0/bin/pnpm
+#   pnpm    11.14.0    path: .../node/24.18.0/bin/pnpm
 # Extract tool name and version via awk; trim leading whitespace.
 ACTUAL_NODE=$(mise current --no-color 2>/dev/null | awk '/^node[[:space:]]/ {print $2; exit}')
 ACTUAL_PNPM=$(mise current --no-color 2>/dev/null | awk '/^pnpm[[:space:]]/ {print $2; exit}')

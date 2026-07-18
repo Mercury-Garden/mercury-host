@@ -21,7 +21,7 @@ node_managers:
     home: ~/.local/share/mise       # resolves to /home/ubuntu/data/.local/share/mise via symlink
     binary: ~/.local/bin/mise
     default_node: 24.18.0
-    default_pnpm: 11.9.0             # corepack-managed, declared via package.json#packageManager
+    default_pnpm: 11.14.0             # corepack-managed, declared via package.json#packageManager
     cached_runtimes:
       - 24.18.0
     migration_note: |

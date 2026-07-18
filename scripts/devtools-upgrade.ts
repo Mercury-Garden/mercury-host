@@ -60,7 +60,7 @@
 //   opencode-ai 1.17.11 → 1.17.12 available
 //   openchamber  1.13.3 (installed via pnpm) → 1.13.8 available
 //   node         v24.18.0 Krypton LTS (current — no upgrade)
-//   pnpm         11.9.0 (current — no upgrade)
+//   pnpm         11.14.0 (current — no upgrade)
 //   mise         2026.7.7 (current — no upgrade)
 //   rtk          0.42.4 → 0.43.0 available
 //   plannotator  0.21.2 → 0.21.3 available
