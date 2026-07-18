@@ -92,11 +92,22 @@ catches most issues before push.
   before committing.
 - **`restore.sh` is NOT end-to-end idempotent.** It installs apt + snap,
   pins mise via `mise use --global node@<ver>` from
-  `packages/node.yaml#default_node`, restores systemd user units, but
-  nginx vhost deploy is
-  manual (copy to `/etc/nginx/sites-available/`, symlink to
+  `packages/node.yaml#default_node`, deploys shell startup files from
+  `shell/.zshenv` + `shell/.profile` (full copy) and patches
+  `~/.zshrc` in-place to swap the toolchain block (volta → mise) without
+  touching per-host customizations (GITHUB_TOKEN, pnpm PATH block,
+  plannotator env vars). Restores systemd user units. Nginx vhost deploy
+  is manual (copy to `/etc/nginx/sites-available/`, symlink to
   `sites-enabled/`, `nginx -t && systemctl reload nginx`). The final
   echo lists every manual step.
+- **Shell file deployment is split**: `shell/.zshenv` and `shell/.profile`
+  are pure declarative (full copy on restore). `shell/.zshrc.template` is
+  a reference template — the live `~/.zshrc` is a hand-maintained overlay
+  on top of it, with per-host additions (GITHUB_TOKEN, pnpm PATH block,
+  plannotator env vars, etc.). `restore.sh` patches `~/.zshrc` surgically
+  to swap the toolchain block but never overwrites the full file. If
+  you add new content to `shell/.zshrc.template`, you'll also need to
+  manually add it to `~/.zshrc` and to the `restore.sh` patch logic.
 - **`backup-mercury-state.sh` writes to `/home/ubuntu/data/backups/`
   (NOT `/tmp`).** The boot volume's `/tmp` is small and the script uses
   a temp dir on the data volume. Output is `mercury-state-<UTC>.tar.zst`

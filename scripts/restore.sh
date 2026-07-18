@@ -56,6 +56,72 @@ if grep -q '^ *default_pnpm:' "$REPO_ROOT/packages/node.yaml"; then
   mise use --global "pnpm@$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
 fi
 
+# ── 3.5. Shell startup files (post-2026-07-18 deployment gap fix) ─────
+# shell/.zshenv + shell/.profile are pure declarative (no per-host
+# customizations). shell/.zshrc.template is a template — the live
+# ~/.zshrc is a hand-maintained overlay that adds GITHUB_TOKEN,
+# the pnpm PATH block, and plannotator env vars. Restoring .zshrc
+# blindly would clobber those customizations. Instead, we copy the
+# two pure files (.zshenv, .profile) and patch the live .zshrc to
+# swap the toolchain block (volta → mise) without touching anything
+# else. The patch is idempotent: if the file already has the mise
+# block, this is a no-op.
+echo "[shell] deploying shell startup files"
+SHELL_DIR="$REPO_ROOT/shell"
+# Literal string marker that identifies a mise-activated .zshrc. Used by the
+# idempotency check below — if this exact line is already present, the file
+# is in post-migration state and no patch is needed.
+# shellcheck disable=SC2016  # literal: we want to grep for the $(...) as text, not expand it
+MISE_ACTIVATE_MARKER='eval "$(mise activate zsh)"'
+
+# .zshenv: full copy (no per-host customizations expected)
+if ! diff -q "$SHELL_DIR/.zshenv" "$HOME/.zshenv" >/dev/null 2>&1; then
+  cp "$SHELL_DIR/.zshenv" "$HOME/.zshenv"
+  echo "  ~/.zshenv updated"
+else
+  echo "  ~/.zshenv already in sync"
+fi
+
+# .profile: full copy
+if ! diff -q "$SHELL_DIR/.profile" "$HOME/.profile" >/dev/null 2>&1; then
+  cp "$SHELL_DIR/.profile" "$HOME/.profile"
+  echo "  ~/.profile updated"
+else
+  echo "  ~/.profile already in sync"
+fi
+
+# .zshrc: surgical patch — swap VOLTA_HOME+PATH for mise activate.
+# Idempotent: detect either pre-migration (volta) or post-migration
+# (mise) state and skip if already correct.
+if grep -q 'export VOLTA_HOME=' "$HOME/.zshrc" 2>/dev/null; then
+  # Pre-migration state: patch the volta block → mise activate.
+  python3 - <<'PYEOF'
+import pathlib
+zshrc = pathlib.Path.home() / '.zshrc'
+text = zshrc.read_text()
+old = ('\nexport VOLTA_HOME="$HOME/.volta"\n'
+       'export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$PATH"')
+new = ('\n# Toolchain — mise (formerly Volta, unmaintained 2025).\n'
+       '# Lives on /home/ubuntu/data via ~/.local/share symlink — DO NOT replace\n'
+       '# this with raw ~/.local/share paths; `mise activate` reads the symlink\n'
+       '# naturally. Verified 2026-07-18 during the volta→mise migration.\n'
+       'if command -v mise >/dev/null 2>&1; then\n'
+       '  eval "$(mise activate zsh)"\n'
+       'fi\n'
+       '# End toolchain.')
+if old in text:
+    text = text.replace(old, new, 1)
+    zshrc.write_text(text)
+    print('  ~/.zshrc: patched VOLTA_HOME block → mise activate')
+else:
+    print('  ~/.zshrc: VOLTA_HOME found but block format unexpected; skipped (manual review needed)')
+PYEOF
+elif grep -qF "$MISE_ACTIVATE_MARKER" "$HOME/.zshrc" 2>/dev/null; then
+  echo "  ~/.zshrc already has mise activate (post-migration state)"
+else
+  echo "  ~/.zshrc: neither volta nor mise block found; skipped (manual review needed)"
+fi
+
 # ── 4. Per-project pins + install ────────────────────────────────────────
 echo "[projects] restoring ~/data/code/* projects"
 if [ -d "$HOME/data/code" ]; then
