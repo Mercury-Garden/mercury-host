@@ -207,7 +207,7 @@ const locateInstalledVersion = (pkg: string): string | null => {
 // has a `cmd-shim-target=...` comment line that records the install hash dir.
 // We strip `/bin/<entry>.js` from that target and read the sibling package.json.
 // Pnpm_HOME may be overridden via env (default ~/.local/share/pnpm).
-const pnpmInstalledVersion = (binName: string, pkgName?: string): string | null => {
+export const pnpmInstalledVersion = (binName: string, pkgName?: string): string | null => {
   const shim = join(PNPM_BIN, binName)
   if (!existsSync(shim)) return null
   // The shim is a shell script with a `# cmd-shim-target=<path>` trailer. Read
@@ -342,7 +342,7 @@ const npmGlobalUpgrade = (pkg: string): string => {
 // These helpers are idempotent — safe to run on a healthy install. Returns
 // the canonical hash-dir name (the newest mtime, content-addressed prefix).
 const pnpmGlobalRoot = (): string => join(PNPM_BIN.replace(/\/bin$/, ''), 'global/v11')
-const newestPnpmHashDir = (): string | null => {
+export const newestPnpmHashDir = (): string | null => {
   const root = pnpmGlobalRoot()
   if (!existsSync(root)) return null
   let dirs: string[] = []
@@ -368,7 +368,7 @@ const newestPnpmHashDir = (): string | null => {
 // 2026-07-14 during the watchdog integration test for fix/cron-openchamber-
 // watchdog: existsSync returned false on a deliberately-broken symlink,
 // resulting in scanned: 0 / repaired: 0 and no repair.
-const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: number } => {
+export const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: number } => {
   const root = pnpmGlobalRoot()
   if (!lstatSync(root, { throwIfNoEntry: false })) return { repaired: 0, scanned: 0 }
   let dirs: string[] = []
@@ -409,7 +409,7 @@ const repairPnpmSymlinks = (pkgPath: string): { repaired: number; scanned: numbe
 // obsolete hash-dir (the one pnpm just removed) is replaced with the
 // canonical hash-dir (newest mtime). Also updates the `# cmd-shim-target=`
 // trailer. Returns the hash-dir the shim now points at, or null on no-op.
-const repointPnpmCmdShim = (binName: string, pkgPath: string): string | null => {
+export const repointPnpmCmdShim = (binName: string, pkgPath: string): string | null => {
   const shim = join(PNPM_BIN, binName)
   if (!existsSync(shim)) return null
   const canonical = newestPnpmHashDir()
@@ -531,7 +531,7 @@ const startOpenchamber = (): string => {
 //     4 = no such unit. We capture stdout/stderr regardless and decode.
 //   - Graceful degradation: if systemctl isn't on PATH (CI container, weird
 //     chroot), we log to error and skip the repair — don't false-alarm.
-const openchamberHealthcheck = (): { active: boolean; subState: string; raw: string } => {
+export const openchamberHealthcheck = (): { active: boolean; subState: string; raw: string } => {
   let raw = ''
   try {
     raw = exec(`systemctl --user is-active openchamber.service 2>&1 || true`, { timeout: 10_000 })
@@ -546,7 +546,7 @@ const openchamberHealthcheck = (): { active: boolean; subState: string; raw: str
 // hash-dir to absolute ones, repoint the cmd-shim to the canonical hash,
 // and (re)start the service. Returns the auto-repair telemetry so the
 // audit function can attach it to the JSON line's error annotation.
-const autoRepairOpenchamber = (): { repaired: number; scanned: number; shimRepointed: boolean; restartOk: boolean } => {
+export const autoRepairOpenchamber = (): { repaired: number; scanned: number; shimRepointed: boolean; restartOk: boolean } => {
   const repaired = repairPnpmSymlinks('@openchamber/web')
   const canonical = repointPnpmCmdShim('openchamber', '@openchamber/web')
   let restartOk = false
@@ -628,40 +628,70 @@ async function auditOpenchamber(): Promise<void> {
   let after: string | null = null
   try {
     const r = await timed(() => Promise.resolve().then(() => pnpmGlobalUpgrade('@openchamber/web', latest)))
-    // Layer B+D recovery: even when `pnpm add -g @x.y.z` succeeds, pnpm may
-    // leave the cmd-shim pointing at a hash-dir it has already garbage-
-    // collected (the next `pnpm add -g` rolls the canonical hash forward).
-    // Repoint the shim to whichever hash-dir is currently the newest.
-    repointPnpmCmdShim('openchamber', '@openchamber/web')
+    // Unconditional Layer B+D post-install repair: regardless of whether
+    // `pnpm add -g` succeeded or partial-failed, run the symlink repair +
+    // cmd-shim repoint. On pnpm 11 with `~/.local/share` as a parent-dir
+    // symlink, a failed install can leave the new hash-dir's
+    // `@openchamber/web` link as a broken relative path with the wrong
+    // number of `../` — the store entry IS intact, only the linkage is
+    // bad. Repairing it brings the service back without manual
+    // intervention. Both helpers are idempotent — safe on a healthy
+    // install (~50ms).
+    //
+    // The previous version only called `repointPnpmCmdShim` on the
+    // success path (it was wrapped in `if (!r.err)` indirectly via the
+    // `after` read). On 2026-07-18 11:00 UTC the install partial-failed
+    // (pnpm wrote a hash-dir with a broken relative symlink, then
+    // errored out on `readInstalledPackages`). Because the post-install
+    // repair ran only on success, the new hash-dir's broken symlink
+    // was never healed, the cmd-shim pointed at a hash-dir whose
+    // `bin/cli.js` couldn't resolve, and openchamber.service went into
+    // `activating (auto-restart)` for ~4 hours.
+    try { repairPnpmSymlinks('@openchamber/web') } catch { /* best effort */ }
+    try { repointPnpmCmdShim('openchamber', '@openchamber/web') } catch { /* best effort */ }
     after = pnpmInstalledVersion('openchamber', '@openchamber/web')
-    // Post-upgrade health-check + auto-repair watchdog (see openchamberHealthcheck
-    // doc-block above). Only runs when the install reported success — a failed
-    // install may have left an incomplete hash-dir that absolute-symlink repair
-    // against would be unsafe. We classify the outcome as `upgraded` (the install
-    // did succeed; the watchdog healed the post-install symptom) so the cron
-    // doesn't accumulate bogus `failed` reports on a class of failure the box
-    // can heal itself.
+    // Post-upgrade classification + watchdog. Three cases:
+    //
+    //   (a) install OK + service active        → `upgraded`, no error
+    //   (b) install OK + service still down    → `upgraded`, error notes auto-repair
+    //   (c) install failed                     → `upgraded` IF the
+    //                                            post-install repair healed
+    //                                            the box, else `failed`.
+    //
+    // Cases (b) and (c) both invoke the watchdog (health-check +
+    // auto-repair loop + re-check). The install did succeed at the
+    // package level (store entry written, hash-dir created) — only the
+    // post-install linkage was bad. The watchdog heals that, and we
+    // report `upgraded` so the cron doesn't accumulate bogus `failed`
+    // reports on a class of failure the box can heal itself. This is
+    // the same shape as pitfall #14 Layer E.
     let errMsg: string | null = null
-    if (r.err) {
-      errMsg = `${r.err}${pre.repaired > 0 ? ` (also repaired ${pre.repaired}/${pre.scanned} broken symlinks pre-install)` : ''}`
-    } else {
-      const hc = openchamberHealthcheck()
-      if (!hc.active && hc.subState !== 'unreachable') {
-        // Install succeeded but the service didn't come up cleanly. Run the
-        // recovery loop and re-check.
-        const repair = autoRepairOpenchamber()
-        // Brief settle so systemd re-evaluates the unit before the next probe.
-        execSync('sleep 3', { encoding: 'utf8' })
-        const hc2 = openchamberHealthcheck()
-        if (hc2.active) {
-          errMsg = `auto-repaired post-install: service was ${hc.subState} → now active (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})`
-        } else {
-          // Repair didn't bring it back. Report as failed with full diagnostic.
-          errMsg = `install OK but service still ${hc2.subState} after auto-repair (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''}); manual intervention required`
-        }
+    let action: 'upgraded' | 'failed' = 'upgraded'
+    const hc = openchamberHealthcheck()
+    if (!hc.active && hc.subState !== 'unreachable') {
+      const repair = autoRepairOpenchamber()
+      execSync('sleep 3', { encoding: 'utf8' })
+      const hc2 = openchamberHealthcheck()
+      if (hc2.active) {
+        errMsg = `${r.err ? `install reported error but post-install repair healed it (was: ${r.err}); ` : 'auto-'}repaired: service was ${hc.subState} → now active (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})`
+      } else if (r.err) {
+        // Repair didn't bring it back AND the install reported an error.
+        // This is the genuine "we couldn't heal it" case — report failed
+        // with the full diagnostic so the user can intervene.
+        action = 'failed'
+        errMsg = `${r.err} (post-install repair did not bring service back; substate=${hc2.subState}; fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}; manual intervention required`
+      } else {
+        // Install reported success but service still down after repair.
+        // Genuinely stuck — manual intervention required.
+        errMsg = `install OK but service still ${hc2.subState} after auto-repair (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}; manual intervention required`
       }
+    } else if (r.err && hc.active) {
+      // Install errored but service is healthy anyway (unusual — e.g.
+      // pnpm errored on a post-install bookkeeping step but the binary
+      // works). Annotate the error for transparency but keep action=upgraded.
+      errMsg = `install reported '${r.err}' but service is active (canonical install: ${after ?? 'unknown'})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}`
     }
-    emit({ tool: 'openchamber', installed, latest: after ?? latest, action: r.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: r.ms, error: errMsg })
+    emit({ tool: 'openchamber', installed, latest: after ?? latest, action, old: installed, new: after, duration_ms: r.ms, error: errMsg })
   } finally {
     try { startOpenchamber() } catch { /* */ }
   }
