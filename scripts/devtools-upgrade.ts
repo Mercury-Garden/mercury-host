@@ -29,6 +29,10 @@
 //     • plannotator — backnotprop/plannotator releases (linux-arm64)
 //     • codegraph   — managed by its own CLI (`codegraph upgrade`)
 //
+//   Standalone npm CLIs (NOT in opencode.jsonc's plugin block, but installed
+//   via the same `npm install -g <pkg>@latest` recipe as the opencode plugins):
+//     • openwiki    — langchain-ai/openwiki (LangChain's repo-doc CLI)
+//
 //   Project service:
 //     • openchamber — @openchamber/web on npm via pnpm; restart
 //                     `openchamber.service` after any successful upgrade
@@ -815,6 +819,15 @@ const OPENCODE_PLUGINS = [
   '@fission-ai/openspec',
 ] as const
 
+// ─── Tool: standalone npm CLIs (NOT opencode.jsonc plugins) ────────────────
+// Same install shape as `OPENCODE_PLUGINS` (`npm install -g <pkg>@latest`
+// against the npm registry), but kept semantically separate because these
+// packages are NOT loaded by opencode. Tracking them here lets the cron
+// pin them to current without polluting the opencode plugin audit semantics.
+const STANDALONE_NPM_CLIS = [
+  'openwiki',
+] as const
+
 async function auditOpencodePlugin(name: string): Promise<void> {
   // Installed version comes from the unified on-disk search across both
   // volta image pools AND the opencode plugin cache. The cache pool is the
@@ -837,17 +850,37 @@ async function auditOpencodePlugin(name: string): Promise<void> {
   emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
 }
 
+async function auditStandaloneNpmCli(name: string): Promise<void> {
+  // Same shape as `auditOpencodePlugin` — these packages are tracked by the
+  // cron but are NOT loaded by opencode, so we don't search the opencode
+  // plugin cache pool. Only the volta image pool matters here. Identical
+  // `npm install -g <pkg>@latest` upgrade path. Kept as a separate helper so
+  // the semantic boundary (opencode-plugin vs. standalone-CLI) stays clear
+  // for future maintainers.
+  const installed = locateInstalledVersion(name)
+  const latest = await npmLatest(name)
+  if (!latest) { emit({ tool: name, installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' }); return }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: name, installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  const u = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade(name)))
+  const after = locateInstalledVersion(name)
+  emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+}
+
 // ─── Main ──────────────────────────────────────────────────────────────────
 async function main() {
   // Audit order: opencode-ai first (the load-bearing upgrade — restarts
   // openchamber). Then openchamber itself. Then runtimes. Then plugins.
-  // Then companion binaries.
+  // Then standalone npm CLIs. Then companion binaries.
   await auditOpencode()
   await auditOpenchamber()
   await auditPnpm()
   await auditNode()
   await auditVolta()
   for (const p of OPENCODE_PLUGINS) await auditOpencodePlugin(p)
+  for (const c of STANDALONE_NPM_CLIS) await auditStandaloneNpmCli(c)
   await auditRtk()
   await auditPlannotator()
   await auditCodegraph()
