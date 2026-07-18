@@ -30,18 +30,31 @@ for app in data.get('apps', []):
 " | grep -v '^$' | bash
 fi
 
-# ── 3. Volta ─────────────────────────────────────────────────────────────
-echo "[volta] installing Volta"
-if ! command -v volta >/dev/null 2>&1; then
-  curl -fsSL https://volta.sh/install.sh | bash -s -- --skip-setup
-  export VOLTA_HOME="$HOME/.volta"
-  export PATH="$VOLTA_HOME/bin:$PATH"
+# ── 3. Mise (formerly Volta, unmaintained 2025) ─────────────────────────
+# Verified 2026-07-18 during the volta→mise migration. install puts the
+# binary at ~/.local/bin/mise by default; the tool install tree lands at
+# ~/.local/share/mise, which is on the data volume via the existing
+# ~/.local/share symlink created in [user_cache] (4.5).
+echo "[mise] installing mise"
+if ! command -v mise >/dev/null 2>&1; then
+  curl -fsSL https://mise.run | sh
+  # Activating here so the subsequent `mise use` already has the symlink
+  # context. On a fresh host this installs Node + toolchain listed in
+  # packages/node.yaml; pnpm is left to be activated per-project via
+  # corepack (declared in each package.json#packageManager).
+  eval "$(~/.local/bin/mise activate bash)"
+  export PATH="$HOME/.local/bin:$PATH"
 fi
 
-echo "[volta] pinning default toolchain"
-volta pin "node@$(awk '/^default_node:/{print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
-volta pin "npm@$(awk '/^default_npm:/{print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
-volta pin "pnpm@$(awk '/^default_pnpm:/{print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
+echo "[mise] configuring default toolchain"
+# `default_node` + `default_pnpm` are read from packages/node.yaml under
+# node_managers.mise; we only set the ones that are explicit. pnpm is
+# corepack-managed per-project — the global pin (default_pnpm) is for
+# tooling outside of any repo (rare).
+mise use --global "node@$(awk '/^ *default_node:/{gsub(/['\''"]/, ""); print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
+if grep -q '^ *default_pnpm:' "$REPO_ROOT/packages/node.yaml"; then
+  mise use --global "pnpm@$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
+fi
 
 # ── 4. Per-project pins + install ────────────────────────────────────────
 echo "[projects] restoring ~/data/code/* projects"

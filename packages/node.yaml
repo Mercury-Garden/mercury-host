@@ -1,43 +1,37 @@
 ---
 # Node.js toolchain state for mercury.
 # Regenerate with: scripts/capture.sh
-# DO NOT track: ~/.volta/tools/image/node/*  (rebuilt by `volta install`)
-# DO NOT track: */node_modules                (rebuilt by `pnpm install --frozen-lockfile`)
+# DO NOT track: ~/.local/share/mise/installs/node/*  (rebuilt by `mise install`)
+# DO NOT track: */node_modules                    (rebuilt by `pnpm install --frozen-lockfile`)
+#
+# Data-volume symlink invariant (verified 2026-07-18):
+#   ~/.local/share  → /home/ubuntu/data/.local/share
+#   ~/.cache        → /home/ubuntu/data/.cache
+# Anything installed under those prefixes lives on the data volume
+# (49GB, /dev/sdb1) automatically. The mise installer places its tree
+# at ~/.local/share/mise by default; it resolves to the data volume.
+# capture.sh's PATH probe must accept both the symlinked path AND the
+# resolved /home/ubuntu/data/... path so the audit passes under both
+# hermes-gateway's sanitized HOME and an interactive zsh session.
 
 node_managers:
-  volta:
-    install_method: https://volta.sh
-    cli_version: 2.0.2
-    home: ~/.volta
+  mise:
+    install_method: https://mise.run
+    cli_version: 2026.7.7
+    home: ~/.local/share/mise       # resolves to /home/ubuntu/data/.local/share/mise via symlink
+    binary: ~/.local/bin/mise
     default_node: 24.18.0
-    default_npm: 11.17.0
-    default_pnpm: 11.14.0
+    default_pnpm: 11.14.0             # corepack-managed, declared via package.json#packageManager
     cached_runtimes:
-      - 24.14.1   # stale; not in current volta cache
-      - 24.16.0   # stale; not in current volta cache
-      - 24.18.0   # stale; not in current volta cache
-    globally_pinned_packages:
-      - name: "@colbymchenry/codegraph"
-        version: 1.4.1
-        node: 24.18.0
-      - name: "@fission-ai/openspec"
-        version: 1.6.0
-        node: 24.18.0
-      - name: "@plannotator/opencode"
-        version: 0.23.1
-        node: 24.18.0
-      - name: context-mode
-        version: 1.0.169
-        node: 24.18.0
-      - name: opencode-ai
-        version: 1.18.3
-        node: 24.18.0
-      - name: openwiki
-        version: 0.2.0
-        node: 24.18.0
-      - name: pnpm
-        version: 11.14.0
-        node: 24.18.0
+      - 24.18.0
+    migration_note: |
+      Replaces the prior `volta` block (unmaintained as of 2025;
+      https://github.com/volta-cli/volta/issues/2080 — its maintainers
+      recommend mise). cron_preflight_capture refreshes these from
+      `mise ls --installed` on every run. Globally pinned tool binaries
+      (opencode, etc.) are no longer owned by mise — they live as
+      standalone npm installs (see AGENTS.md for the daily upgrade
+      procedure).
 
   hermes_bundled:
     home: ~/.hermes/node
@@ -49,24 +43,23 @@ node_managers:
 system_node:
   present: false
   path: /usr/bin/node
-  note: "No system node. All node access goes through volta (general) or hermes/node (gateway)."
+  note: "No system node. All node access goes through mise (general) or hermes/node (gateway)."
 
 path_order_required:
-  # Actual order from interactive `zsh -i -c 'echo $PATH'` on mercury as
-  # of 2026-07-07 (verified after the audit surfaced this drift).
-  # .zshenv (sourced before .zshrc) prepends $VOLTA_HOME/bin and .local/bin.
-  # .zshrc line ~108 prepends $HOME/data/.mercury/bin.
-  # .zshrc line ~115 prepends $PNPM_HOME/bin (intentional — most-recently
-  #   installed pnpm wins, and pnpm's bin dir needs to shadow volta's pnpm
-  #   shim so version-pinned pnpm from package.json is preferred).
-  # Note: pnpm-store prepending is BY DESIGN — without it, the global
-  #   volta pnpm (11.10.0) would shadow the project-pinned pnpm (11.9.0)
-  #   and break the lockfile_sha256 reproducibility check in audit.sh.
-  # After dedup: pnpm-store, volta, .local/bin, .mercury/bin, hermes-venv.
-  # Verified 2026-07-07: the audit was correctly catching drift between
-  # this inventory and the actual ~/.zshrc; the inventory was the liar.
-  - ~/.local/share/pnpm/bin
-  - ~/.volta/bin
+  # After the volta→mise migration (2026-07-18). Verified by the audit
+  # `capture.sh` PATH-walk validator. Order rationale:
+  # - ~/.local/share/mise/installs/node/24.18.0/bin  (mise node, data volume)
+  # - ~/.local/bin                                  (mise binary + pnpm shims)
+  # - ~/data/.mercury/bin                           (mercury-tasks CLI)
+  # - ~/.hermes/hermes-agent/venv/bin               (gateway venv)
+  # - ~/.hermes/hermes-agent/node_modules/.bin     (gateway tooling)
+  # - ~/.hermes/node/bin                            (Hermes-bundled Node 22.23.0)
+  # - ~/.cargo/bin                                  (rust)
+  # - system paths unchanged
+  # Note: mise-managed pnpm (via Corepack, declared in package.json)
+  #       shadows nothing else here; `pnpm -v` resolves to the same
+  #       binary across all 5 mercury repos post-migration.
+  - ~/.local/share/mise/installs/node/24.18.0/bin
   - ~/.local/bin
   - ~/data/.mercury/bin
   - ~/.hermes/hermes-agent/venv/bin

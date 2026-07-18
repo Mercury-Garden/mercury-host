@@ -8,13 +8,13 @@
 //
 // Tracked tools (canonical list lives below — keep it short and actionable):
 //
-//   Runtime (managed by volta):
+//   Runtime (managed by mise; pnpm via corepack):
 //     • node        — pinned to current LTS major (24.x); only auto-upgrade
 //                     within the same major. New LTS major lines are
 //                     surfaced as a "lts-major-changed" report but NOT
 //                     auto-applied.
-//     • pnpm        — volta tracks the latest pnpm release
-//     • volta       — self-update via the official curl installer
+//     • pnpm        — corepack-managed per package.json#packageManager
+//     • mise        — self-update via the official mise.run installer
 //
 //   Opencode core + opencode plugins (from `opencode.jsonc` plugin block):
 //     • opencode-ai                                     — npm
@@ -60,8 +60,8 @@
 //   opencode-ai 1.17.11 → 1.17.12 available
 //   openchamber  1.13.3 (installed via pnpm) → 1.13.8 available
 //   node         v24.18.0 Krypton LTS (current — no upgrade)
-//   pnpm         11.9.0 (current — no upgrade)
-//   volta        2.0.2 (current — no upgrade)
+//   pnpm         11.14.0 (current — no upgrade)
+//   mise         2026.7.7 (current — no upgrade)
 //   rtk          0.42.4 → 0.43.0 available
 //   plannotator  0.21.2 → 0.21.3 available
 //   codegraph    1.1.1 (use `codegraph upgrade --check`)
@@ -73,31 +73,59 @@ import { homedir } from 'node:os'
 
 const HOME = homedir()
 
-// ─── Volta + pnpm path resolution ─────────────────────────────────────────
-// The hermes-gateway.service runs this script under a sanitized PATH that
-// historically did NOT include ~/.volta/bin, so bare `node` / `volta` / `npm`
-// invocations resolved to the hermes-bundled toolchain (~/.hermes/node) — a
-// different node major, and a missing volta. That surfaced as a phantom
-// `node: failed (volta: not found)` line every cron tick. To stay correct
-// regardless of the parent process's PATH, we resolve volta's bin dir once
-// at startup and prepend it to every exec() call's environment.
-//
-// We also prepend pnpm's `configured global bin directory` (default
-// ~/.local/share/pnpm/bin). Without it, pnpm prints `[ERROR] The configured
-// global bin directory "…" is not in PATH` to STDOUT on every invocation —
-// which corrupts the JSON-line contract and silently demotes the openchamber
-// audit to `noop` (since JSON.parse throws → installed stays null → cmpVer
-// short-circuits → noop). Verified against the box on 2026-07-11: with this
-// dir on PATH, `pnpm ls -g @openchamber/web --json` returns valid JSON and
-// the audit correctly upgrades 1.13.8 → 1.15.0.
-//
-// VOLTA_HOME may be set explicitly (e.g. by the user's shell rc). Default
-// to ~/.volta. The bin dir is whatever lives at $VOLTA_HOME/bin.
-// Pnpm_HOME_DIR may be set explicitly. Default to ~/.local/share/pnpm.
-const VOLTA_HOME_DIR = process.env.VOLTA_HOME || join(HOME, '.volta')
-const VOLTA_BIN = join(VOLTA_HOME_DIR, 'bin')
-const Pnpm_HOME_DIR = process.env.Pnpm_HOME || join(HOME, '.local/share/pnpm')
+// ─── Mise + pnpm path constants (resolved at module load) ───────────────
+// We resolve the mise data dir once at module load. There are three
+// plausible homes for mise's data, in priority order:
+//   1. /home/ubuntu/data/.local/share/mise      (data volume, canonical)
+//   2. ${HOME}/.local/share/mise                 (via data-volume symlink)
+//   3. /home/ubuntu/.local/share/mise            (legacy / boot-volume fallback)
+// MISE_DATA_DIR is whichever exists. MISE_NODE_BIN is the active node's
+// bin dir under installs/node/<ver>/bin (resolved at module load by
+// shelling out to `mise current --no-color`). Prepended to every exec().
+const MISE_DATA_DIR = (() => {
+  for (const cand of [
+    process.env.MISE_DATA_DIR,
+    '/home/ubuntu/data/.local/share/mise',
+    join(HOME, '.local/share/mise'),
+  ]) {
+    if (cand && existsSync(cand)) return cand
+  }
+  return join(HOME, '.local/share/mise') // default if nothing exists
+})()
+
+let MISE_NODE_BIN = ''
+try {
+  MISE_NODE_BIN = execSync(`"${MISE_DATA_DIR}/../bin/mise" current --no-color`, { encoding: 'utf8' })
+    .split('\n').find((l) => l.startsWith('node'))?.split(/\s+/)[1] ? '' : ''
+  // Resolve the node bin dir by reading the live mise node-version
+  const nodeVer = execSync(`"${MISE_DATA_DIR}/../bin/mise" current node --no-color`, { encoding: 'utf8' }).trim().replace(/^node\s+/, '')
+  MISE_NODE_BIN = join(MISE_DATA_DIR, 'installs', `node`, nodeVer, 'bin')
+} catch {
+  // best-effort; fall through to symlinked path
+}
+if (!MISE_NODE_BIN || !existsSync(MISE_NODE_BIN)) {
+  MISE_NODE_BIN = join(HOME, '.local/share/mise/installs/node/24.18.0/bin')
+}
+
+// Pnpm_HOME_DIR may be set explicitly. Default to ~/.local/share/pnpm
+// (also on data volume via symlink).
+const Pnpm_HOME_DIR = process.env.Pnpm_HOME || (() => {
+  for (const cand of [join(HOME, '.local/share/pnpm'), '/home/ubuntu/data/.local/share/pnpm']) {
+    if (cand && existsSync(cand)) return cand
+  }
+  return join(HOME, '.local/share/pnpm')
+})()
 const PNPM_BIN = join(Pnpm_HOME_DIR, 'bin')
+
+const MISE_BIN = (() => {
+  // The mise CLI itself lives at ~/.local/bin/mise (relocated by the
+  // installer); we don't strictly need it on PATH for this script, but
+  // it's tracked here for completeness.
+  for (const cand of [join(HOME, '.local/bin/mise'), '/home/ubuntu/data/.local/bin/mise']) {
+    if (cand && existsSync(cand)) return cand
+  }
+  return ''
+})()
 
 // ─── JSON-line output ──────────────────────────────────────────────────────
 // The cron prompt reads stdout line-delimited. Keep this line shape stable.
@@ -124,23 +152,22 @@ const timed = async <T>(fn: () => Promise<T>): Promise<{ value: T | null; ms: nu
 }
 
 const exec = (cmd: string, opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {}): string => {
-  // Always run with VOLTA_BIN at the front of PATH so bare `node` / `npm` /
-  // `pnpm` / `volta` invocations resolve to the user-managed toolchain even
-  // when the parent process's PATH (e.g. hermes-gateway.service) does not
-  // include it. We also prepend PNPM_BIN so pnpm does not print
-  // `[ERROR] The configured global bin directory "…" is not in PATH` to
+  // Always run with MISE_NODE_BIN at the front of PATH so bare `node` /
+  // `npm` invocations resolve to the user-managed toolchain even when the
+  // parent process's PATH (e.g. hermes-gateway.service) does not include
+  // it. We also prepend PNPM_BIN so pnpm does not print
+  // `[ERROR] The configured global bin directory "…"` is not in PATH` to
   // stdout on every invocation (that non-JSON line corrupts the JSON-line
-  // contract used by the openchamber audit — pitfall #14). We propagate
-  // VOLTA_HOME in case the child process shells out further.
+  // contract used by the openchamber audit — pitfall #14).
   const basePath = process.env.PATH || ''
-  // Prepend in priority order: volta bin first (so `node`/`npm` from volta
-  // win), then pnpm bin (so pnpm's self-check on its configured bin dir
-  // passes), then whatever the parent supplied.
+  // Prepend in priority order: mise-managed node bin first (so `node`/
+  // `npm` from mise win), then pnpm bin (so pnpm's self-check on its
+  // configured bin dir passes), then whatever the parent supplied.
   const pnpmPrefix = existsSync(PNPM_BIN) ? `${PNPM_BIN}:` : ''
+  const miseNodePrefix = MISE_NODE_BIN && existsSync(MISE_NODE_BIN) ? `${MISE_NODE_BIN}:` : ''
   const env = {
     ...process.env,
-    VOLTA_HOME: VOLTA_HOME_DIR,
-    PATH: `${VOLTA_BIN}:${pnpmPrefix}${basePath}`,
+    PATH: `${miseNodePrefix}${pnpmPrefix}${basePath}`,
     ...(opts.env || {}),
   } as NodeJS.ProcessEnv
   return execSync(cmd, {
@@ -183,17 +210,15 @@ const pkgField = (path: string, field: string): string | null => {
 }
 
 // ─── Helper: locate the on-disk version of a plugin across BOTH opencode
-// runtime storage pools (volta image-managed globals AND the opencode
+// runtime storage pools (npm-global-installed globals AND the opencode
 // per-user cache used by `opencode plugin add`). Returns null when missing. ──
+// (Volta's image-managed global pool used to be Pool 1; post-2026-07-18
+//  global npm installs land at ~/.npm-global/ or wherever npm decides;
+//  we check the opencode per-user cache as a definitive fallback.)
 const locateInstalledVersion = (pkg: string): string | null => {
-  // Pool 1: volta's image-managed global npm packages
-  //   ~/.volta/tools/image/packages/<as-installed-name>/lib/node_modules/<as-installed-name>/package.json
-  const volPath = join(HOME, '.volta/tools/image/packages', pkg, 'lib/node_modules', pkg, 'package.json')
-  const v = pkgField(volPath, 'version')
-  if (v) return v
-  // Pool 2: opencode's `~/.cache/opencode/packages/<pkg>/package.json`
-  //    Plus a `package.json` one level deeper (the actual package, with the
-  //    bundled native binary's deps as siblings).
+  // Pool 1: opencode per-user cache (most reliable post-migration)
+  //   ~/.cache/opencode/packages/<pkg>/package.json
+  //    (Plus possibly one level deeper for bundled native binaries.)
   const ocRoot = join(HOME, '.cache/opencode/packages', pkg, 'package.json')
   const v2 = pkgField(ocRoot, 'version')
   if (v2) return v2
@@ -307,12 +332,11 @@ const nodeLatestLtsInActiveMajor = async (): Promise<{ latestMinor: string | nul
   } catch { return { latestMinor: null, latestLts: null, activeMajor: null } }
 }
 
-// ─── Upgrade: npm global package via volta's active node ───────────────────
+// ─── Upgrade: npm global package via mise's active node ──────────────────
 const npmGlobalUpgrade = (pkg: string): string => {
-  // `npm install -g <pkg>@latest`. Running through the active node's npm so the
-  // install lands in the same root opencode-ai currently lives under (volta-
-  // shimmed). 5-minute ceiling — a fresh install of a 50MB package can take a
-  // while.
+  // `npm install -g <pkg>@latest`. Running through the active node's npm so
+  // the install lands in the same root opencode-ai currently lives under.
+  // 5-minute ceiling — a fresh install of a 50MB package can take a while.
   return exec(`npm install -g ${pkg}@latest --no-audit --no-fund --silent --no-progress`, { timeout: 240_000 })
 }
 
@@ -443,10 +467,10 @@ const pnpmGlobalUpgrade = (pkg: string, version: string): string => {
   return exec(`pnpm add -g ${pkg}@${version}`, { timeout: 240_000 })
 }
 
-// ─── Upgrade: volta install (handles node + pnpm alike) ────────────────────
-const voltaInstall = (what: string): string => {
-  // volta install is silent on no-op — but it ALWAYS exits 0. Capture stdout.
-  return exec(`volta install ${what}`, { timeout: 240_000 })
+// ─── Upgrade: mise install (handles node + global packages alike) ─────────
+const miseInstall = (what: string): string => {
+  // `mise install` is silent on no-op — but it ALWAYS exits 0. Capture stdout.
+  return exec(`mise install ${what}`, { timeout: 240_000 })
 }
 
 // ─── Upgrade: GH-release binary (download + atomic replace + chmod) ───────
@@ -697,7 +721,12 @@ async function auditOpenchamber(): Promise<void> {
   }
 }
 
-// ─── Tool: pnpm (via volta) ────────────────────────────────────────────────
+// ─── Tool: pnpm (via corepack; declared per-project in package.json#packageManager) ─
+// The actual upgrade happens project-side via corepack. Global pnpm
+// version is recorded here for visibility only — no upgrade action
+// performed. mise's pnpm plugin is also tracked separately by
+// auditMise(); corepack takes precedence over mise-installed pnpm when
+// both are present (verified 2026-07-18).
 async function auditPnpm(): Promise<void> {
   let installed: string | null = null
   try { installed = exec('pnpm --version', { timeout: 5_000 }) } catch { /* */ }
@@ -708,13 +737,23 @@ async function auditPnpm(): Promise<void> {
     emit({ tool: 'pnpm', installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
     return
   }
-  const u = await timed(() => Promise.resolve().then(() => voltaInstall(`pnpm@${latest}`)))
-  let after: string | null = null
-  try { after = exec('pnpm --version', { timeout: 5_000 }) } catch { /* */ }
-  emit({ tool: 'pnpm', installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+  // pnpm versions are pinned per-project via package.json#packageManager
+  // (corepack-managed). We do NOT run `mise use pnpm@latest` globally
+  // — that would race with the per-project pin. Report the gap; let
+  // callers upgrade by editing their package.json.
+  emit({
+    tool: 'pnpm',
+    installed,
+    latest,
+    action: 'noop',
+    old: null,
+    new: null,
+    duration_ms: 0,
+    error: `corepack-managed; bump package.json#packageManager to "pnpm@${latest}" to upgrade`,
+  })
 }
 
-// ─── Tool: node (via volta, same-major LTS pinning) ────────────────────────
+// ─── Tool: node (via mise, same-major LTS pinning) ────────────────────────
 async function auditNode(): Promise<void> {
   let installed: string | null = null
   try { installed = exec('node --version', { timeout: 5_000 }) } catch { /* */ }
@@ -733,30 +772,31 @@ async function auditNode(): Promise<void> {
     emit({ tool: 'node', installed, latest: latestMinor, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
     return
   }
-  const u = await timed(() => Promise.resolve().then(() => voltaInstall(`node@${latestMinor}`)))
+  const u = await timed(() => Promise.resolve().then(() => miseInstall(`node@${latestMinor}`)))
   let after: string | null = null
   try { after = exec('node --version', { timeout: 5_000 }) } catch { /* */ }
   emit({ tool: 'node', installed, latest: after ?? latestMinor, action: after && cmpVer(after.replace(/^v/, ''), installed.replace(/^v/, '')) > 0 ? 'upgraded' : 'failed', old: installed, new: after, duration_ms: u.ms, error: u.err })
 }
 
-// ─── Tool: volta (self-update via curl installer) ──────────────────────────
-async function auditVolta(): Promise<void> {
+// ─── Tool: mise (self-update via mise.run installer) ───────────────────────
+async function auditMise(): Promise<void> {
   let installed: string | null = null
-  try { installed = exec('volta --version', { timeout: 5_000 }) } catch { /* */ }
-  // No registry for volta — GitHub releases.
-  const { tag } = await ghLatest('volta-cli', 'volta')
-  if (!tag) { emit({ tool: 'volta', installed, latest: null, action: 'failed', old: null, new: null, duration_ms: 0, error: 'github fetch failed' }); return }
-  // tag looks like "v2.0.2"
+  try { installed = exec('mise --version', { timeout: 5_000 }) } catch { /* */ }
+  // No npm registry for mise — GitHub releases.
+  const { tag } = await ghLatest('jdx', 'mise')
+  if (!tag) { emit({ tool: 'mise', installed, latest: null, action: 'failed', old: null, new: null, duration_ms: 0, error: 'github fetch failed' }); return }
+  // tag looks like "v2026.7.7"
   if (!installed || cmpVer(installed, tag.replace(/^v/, '')) >= 0) {
-    emit({ tool: 'volta', installed, latest: tag, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    emit({ tool: 'mise', installed, latest: tag, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
     return
   }
   // Self-update. The installer is non-interactive (it never asks). 5 minutes
-  // ceiling — the script re-downloads into ~/.volta.
-  const u = await timed(() => Promise.resolve().then(() => exec('curl -fsSL https://get.volta.sh | bash -s -- --skip-setup', { timeout: 240_000 })))
+  // ceiling — the script re-downloads into ~/.local/bin/mise and rewrites
+  // ~/.local/share/mise on the data volume (via the existing symlink).
+  const u = await timed(() => Promise.resolve().then(() => exec('curl -fsSL https://mise.run | sh', { timeout: 240_000 })))
   let after: string | null = null
-  try { after = exec('volta --version', { timeout: 5_000 }) } catch { /* */ }
-  emit({ tool: 'volta', installed, latest: after ?? tag, action: after && cmpVer(after, installed) > 0 ? 'upgraded' : 'failed', old: installed, new: after, duration_ms: u.ms, error: u.err })
+  try { after = exec('mise --version', { timeout: 5_000 }) } catch { /* */ }
+  emit({ tool: 'mise', installed, latest: after ?? tag, action: after && cmpVer(after, installed) > 0 ? 'upgraded' : 'failed', old: installed, new: after, duration_ms: u.ms, error: u.err })
 }
 
 // ─── Tool: rtk (rtk-ai/rtk aarch64 tarball) ────────────────────────────────
@@ -859,14 +899,12 @@ const STANDALONE_NPM_CLIS = [
 ] as const
 
 async function auditOpencodePlugin(name: string): Promise<void> {
-  // Installed version comes from the unified on-disk search across both
-  // volta image pools AND the opencode plugin cache. The cache pool is the
-  // runtime source of truth for opencode — but `npm install -g` writes
-  // through volta's path. We pick whichever is latest, so a freshly-upgraded
-  // volta-managed install doesn't look "missing" just because the opencode
-  // cache hasn't been refreshed.
-  const installedVolta = locateInstalledVersion(name)
-  const installed = installedVolta
+  // Installed version comes from the unified on-disk search via
+  // locateInstalledVersion — searches the opencode plugin cache as the
+  // runtime source of truth. `npm install -g` writes to npm's global
+  // prefix; the cache reflects a subsequent `opencode` runtime load.
+  const installedCache = locateInstalledVersion(name)
+  const installed = installedCache
   const latest = await npmLatest(name)
   if (!latest) { emit({ tool: name, installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' }); return }
   if (!installed || cmpVer(installed, latest) >= 0) {
@@ -874,8 +912,9 @@ async function auditOpencodePlugin(name: string): Promise<void> {
     return
   }
   const u = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade(name)))
-  // After install, refresh the cache pool AND volta. The volta path is what
-  // npm just touched, so it's our post-install truth source.
+  // After install, refresh the on-disk read; the npm global prefix is
+  // what `npm install -g` just touched, so the post-install truth comes
+  // back through locateInstalledVersion (cache or global prefix).
   const after = locateInstalledVersion(name)
   emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
 }
@@ -883,10 +922,9 @@ async function auditOpencodePlugin(name: string): Promise<void> {
 async function auditStandaloneNpmCli(name: string): Promise<void> {
   // Same shape as `auditOpencodePlugin` — these packages are tracked by the
   // cron but are NOT loaded by opencode, so we don't search the opencode
-  // plugin cache pool. Only the volta image pool matters here. Identical
-  // `npm install -g <pkg>@latest` upgrade path. Kept as a separate helper so
-  // the semantic boundary (opencode-plugin vs. standalone-CLI) stays clear
-  // for future maintainers.
+  // plugin cache pool. `npm install -g <pkg>@latest` is the upgrade path.
+  // Kept as a separate helper so the semantic boundary (opencode-plugin
+  // vs. standalone-CLI) stays clear for future maintainers.
   const installed = locateInstalledVersion(name)
   const latest = await npmLatest(name)
   if (!latest) { emit({ tool: name, installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' }); return }
@@ -908,7 +946,7 @@ async function main() {
   await auditOpenchamber()
   await auditPnpm()
   await auditNode()
-  await auditVolta()
+  await auditMise()
   for (const p of OPENCODE_PLUGINS) await auditOpencodePlugin(p)
   for (const c of STANDALONE_NPM_CLIS) await auditStandaloneNpmCli(c)
   await auditRtk()

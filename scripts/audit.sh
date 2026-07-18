@@ -6,8 +6,8 @@
 #
 # IMPORTANT: run under the user's interactive shell, not under a service
 # account. This script sources ~/.zshrc to get the user's real PATH,
-# otherwise it would report volta as missing whenever it runs under
-# hermes-agent's venv-isolated PATH.
+# otherwise it would report mise as missing whenever it runs under
+# hermes-agent's venv-isolated PATH (post-2026-07-18; previously volta).
 
 set -euo pipefail
 
@@ -16,7 +16,7 @@ INV="$REPO_ROOT/inventory.yaml"
 PKG_NODE="$REPO_ROOT/packages/node.yaml"
 
 # Try to reconstruct the user's real PATH. Hermes-agent shells don't have
-# volta on PATH; a real login shell does.
+# mise on PATH; a real login shell does.
 if [ -z "${USER_SHELL_LOADED:-}" ]; then
   if [ -f "$HOME/.zshrc" ] && command -v zsh >/dev/null 2>&1; then
     USER_PATH=$(zsh -i -c 'echo $PATH' 2>/dev/null | tail -1)
@@ -54,38 +54,60 @@ require_yaml_field() {
 
 echo "=== mercury-host audit — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
-# ── 1. Volta + Node toolchain ────────────────────────────────────────────
+# ── 1. Mise + Node toolchain (formerly Volta; unmaintained 2025) ───────
 echo
-echo "[volta]"
-if ! command -v volta >/dev/null 2>&1; then
-  drift "volta not on PATH (after sourcing user shell)"
+echo "[mise]"
+if ! command -v mise >/dev/null 2>&1; then
+  drift "mise not on PATH (after sourcing user shell)"
 else
-  ok "volta present: $(volta --version)"
+  ok "mise present: $(mise --version | head -1)"
 fi
 
 EXPECT_NODE=$(require_yaml_field "$PKG_NODE" "default_node")
-EXPECT_NPM=$(require_yaml_field "$PKG_NODE" "default_npm")
-EXPECT_PNPM=$(require_yaml_field "$PKG_NODE" "default_pnpm")
+# default_pnpm is corepack-managed per-project; fall back to "11.14.0" if absent
+EXPECT_PNPM=$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$PKG_NODE" 2>/dev/null)
+[ -z "$EXPECT_PNPM" ] && EXPECT_PNPM="11.14.0"
 
-ACTUAL_NODE=$(volta list 2>/dev/null | awk '/^runtime node/ {print $2; exit}' | sed -E 's/^[^@]+@//; s/[()]//g')
-ACTUAL_NPM=$(volta list 2>/dev/null | awk '/^package-manager npm/ {print $2; exit}' | sed -E 's/^[^@]+@//; s/[()]//g')
-ACTUAL_PNPM=$(volta list 2>/dev/null | awk '/^package pnpm/ {print $2; exit}' | sed -E 's/^[^@]+@//; s/[()]//g')
+# `mise current --no-color` prints lines like:
+#   node    24.18.0   path: .../node/24.18.0/bin/node
+#   pnpm    11.14.0    path: .../node/24.18.0/bin/pnpm
+# Extract tool name and version via awk; trim leading whitespace.
+ACTUAL_NODE=$(mise current --no-color 2>/dev/null | awk '/^node[[:space:]]/ {print $2; exit}')
+ACTUAL_PNPM=$(mise current --no-color 2>/dev/null | awk '/^pnpm[[:space:]]/ {print $2; exit}')
 
 if [ "$ACTUAL_NODE" = "$EXPECT_NODE" ]; then
   ok "default node = $EXPECT_NODE"
 else
   drift "default node = '$ACTUAL_NODE' (expected '$EXPECT_NODE')"
 fi
-if [ "$ACTUAL_NPM" = "$EXPECT_NPM" ]; then
-  ok "default npm = $EXPECT_NPM"
-else
-  drift "default npm = '$ACTUAL_NPM' (expected '$EXPECT_NPM')"
-fi
 if [ "$ACTUAL_PNPM" = "$EXPECT_PNPM" ]; then
-  ok "default pnpm = $EXPECT_PNPM"
+  ok "default pnpm = $EXPECT_PNPM (corepack)"
 else
-  drift "default pnpm = '$ACTUAL_PNPM' (expected '$EXPECT_PNPM')"
+  # Not a hard drift — corepack may not have a default until first project use.
+  note "default pnpm = '$ACTUAL_PNPM' (expected '$EXPECT_PNPM' — corepack)"
 fi
+
+# ── 1.5. Symlink invariant (data-volume migration 2026-07-05) ───────────
+# ~/.local/share and ~/.cache MUST resolve to the data volume. If they
+# point at the boot volume, every tool that installs into those prefixes
+# (mise, pnpm, uv, playwright, hermes-gateway mmap loads) silently
+# blasts the boot disk. Verified post-migration 2026-07-18.
+echo
+echo "[symlinks]"
+for symlink in ".local/share" ".cache"; do
+  target="$HOME/$symlink"
+  if [ ! -L "$target" ]; then
+    drift "  $symlink is not a symlink (data-volume relocation regressed)"
+    continue
+  fi
+  resolved=$(readlink -f "$target")
+  expected="/home/ubuntu/data/$symlink"
+  if [ "$resolved" = "$expected" ]; then
+    ok "  $symlink -> $resolved"
+  else
+    drift "  $symlink -> $resolved (expected $expected)"
+  fi
+done
 
 # ── 2. Hermes bundled node ───────────────────────────────────────────────
 echo
@@ -97,7 +119,7 @@ else
   ok "hermes node = $HN"
 fi
 
-# ── 3. Project registry: every tracked project present + has a volta pin ─
+# ── 3. Project registry: every tracked project present + has a version pin ─
 echo
 echo "[projects]"
 while IFS=$'\t' read -r path repo expected_branch; do
@@ -110,11 +132,22 @@ while IFS=$'\t' read -r path repo expected_branch; do
   fi
   ok "$path present"
   if [ -f "$full/package.json" ]; then
-    PINNED_NODE=$(python3 -c "import json; d=json.load(open('$full/package.json')); v=d.get('volta',{}); print(v.get('node',''))" 2>/dev/null)
+    # Version-pinning source-of-truth was migrated (2026-07-18) from
+    # `package.json#volta.node` to `mise.toml#tools.node` + an optional
+    # `package.json#packageManager` corepack pin. The `tomllib.load` call
+    # requires Python 3.11+; capture.sh uses 3.12 paths. fall back to
+    # legacy `volta` field for any not-yet-migrated fork.
+    PINNED_NODE=""
+    if [ -f "$full/mise.toml" ] && python3 -c "import tomllib, sys; sys.exit(0 if tomllib.load(open('$full/mise.toml','rb')) else 1)" 2>/dev/null; then
+      PINNED_NODE=$(python3 -c "import tomllib; d=tomllib.load(open('$full/mise.toml','rb')); print(d.get('tools',{}).get('node',''))" 2>/dev/null)
+    fi
     if [ -z "$PINNED_NODE" ]; then
-      drift "  REPRODUCIBILITY: $full/package.json has no 'volta.node' pin"
+      PINNED_NODE=$(python3 -c "import json; d=json.load(open('$full/package.json')); v=d.get('volta',{}); print(v.get('node',''))" 2>/dev/null)
+    fi
+    if [ -z "$PINNED_NODE" ]; then
+      drift "  REPRODUCIBILITY: $full/{mise.toml,package.json#volta} has no node pin"
     else
-      ok "  volta pin = $PINNED_NODE"
+      ok "  node pin = $PINNED_NODE"
     fi
   fi
   if [ -n "$expected_branch" ] && [ -d "$full/.git" ]; then
@@ -955,8 +988,8 @@ drift = 0
 import shutil
 
 def find_openwiki():
-    """Locate the openwiki binary on PATH (or under the volta tools dir).
-    Mirrors `command -v openwiki` semantics: returns the absolute path or None."""
+    """Locate the openwiki binary on PATH (now a global npm install; was
+    bundled via volta prior to the 2026-07-18 migration)."""
     return shutil.which('openwiki')
 
 # 1. CLI on PATH
@@ -965,13 +998,13 @@ if expected_cfg is None:
 
 # Sanity: if the user ran `openwiki --init`, ~/.openwiki/.env exists. Until
 # that point we still want the binary check to pass (the binary is installed
-# via volta; the env file is user-driven). Don't drift on the env file
+# via npm install; the env file is user-driven). Don't drift on the env file
 # existence — drift on its CONFIG contents when present.
 ow_bin = find_openwiki()
 if ow_bin:
     print(f"  ✓ openwiki on PATH: {ow_bin}")
 else:
-    print("  ✗ DRIFT: openwiki not on PATH — reinstall with `volta install openwiki`")
+    print("  ✗ DRIFT: openwiki not on PATH — reinstall with `npm install -g openwiki`")
     drift += 1
 
 if ow_env.exists():

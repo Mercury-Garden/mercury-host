@@ -4,7 +4,7 @@
 #
 # Scope:
 #   1. packages/apt.list          — full regen from `apt-mark showmanual`, header preserved
-#   2. inventory.yaml projects[]  — refresh lockfile_sha256 + volta_pinned per project
+#   2. inventory.yaml projects[]  — refresh lockfile_sha256 + toolchain_pinned per project
 #   3. packages/snap.yaml apps[]  — refresh version/revision/channel/publisher/classic/notes,
 #                                   preserve hand-written `purpose:` per app + runtime_bases
 #   4. packages/node.yaml         — refresh default_* + cached_runtimes +
@@ -20,13 +20,16 @@
 #   - packages/node.yaml projects[] block   — duplicate of inventory.yaml; removed
 #   - network/vcn-topology.md     — hand-written Oracle VCN reference, manually updated
 #
-# IMPORTANT: capture.sh shells out to `volta` (and pnpm) via subprocess. If the
-# parent shell doesn't have ~/.volta/bin on PATH — e.g. running under hermes-
-# gateway.service (pitfall #11), under a CI runner with a sanitized PATH, or
-# from any subprocess context that doesn't inherit the user's interactive
-# shell — the `volta` invocation fails with FileNotFoundError and the script
-# silently captures `globally_pinned_packages: 0`, nuking the real entries.
+# IMPORTANT: capture.sh shells out to `mise` (and pnpm via Corepack) via
+# subprocess. If the parent shell doesn't have ~/.local/bin on PATH —
+# e.g. running under hermes-gateway's venv-isolated PATH, a CI runner's
+# sanitized PATH, or any subprocess that doesn't inherit the user's
+# interactive shell — the `mise` invocation fails with FileNotFoundError.
 # audit.sh already guards this with USER_SHELL_LOADED (sourcing ~/.zshrc to
+# reconstruct the PATH); the same guard precedes this python3 block from
+# the bash side. The python3 subprocess below ALSO probes both the
+# symlinked (~/.local/share) and resolved (/home/ubuntu/data/.local/share)
+# paths under the data-volume invariant.
 # reconstruct the user's real PATH). capture.sh does the same here.
 
 set -euo pipefail
@@ -72,7 +75,7 @@ cat /tmp/apt-keep /tmp/apt-list > packages/apt.list
 rm -f /tmp/apt-keep /tmp/apt-list
 note "wrote packages/apt.list ($(wc -l < packages/apt.list) entries, $(grep -cE '^[a-zA-Z0-9]' packages/apt.list) packages)"
 
-# ── inventory.yaml: refresh lockfile_sha256 + volta_pinned per project ─
+# ── inventory.yaml: refresh lockfile_sha256 + toolchain_pinned per project ─
 echo
 echo "[projects]"
 python3 - <<'PYEOF'
@@ -84,16 +87,16 @@ home = pathlib.Path.home()
 
 # Find every project block: starts at "  - path: <path>" and ends at the next
 # "  - path:" or end of the projects: section. Anchored by the projects: line.
-def update_block(block, lockfile_sha, volta_pinned, proj_name):
-    """Update lockfile_sha256 and volta_pinned within a single project block."""
+def update_block(block, lockfile_sha, toolchain_pinned, proj_name):
+    """Update lockfile_sha256 and toolchain_pinned within a single project block."""
     new = re.sub(
         r'^([ \t]*lockfile_sha256: )[0-9a-f]+.*$',
         rf'\g<1>{lockfile_sha}    # capture.sh: refreshed {proj_name}',
         block, count=1, flags=re.MULTILINE,
     )
     new = re.sub(
-        r'^([ \t]*volta_pinned: )(true|false).*$',
-        rf'\g<1>{str(volta_pinned).lower()}',
+        r'^([ \t]*toolchain_pinned: )(true|false).*$',
+        rf'\g<1>{str(toolchain_pinned).lower()}',
         new, count=1, flags=re.MULTILINE,
     )
     return new
@@ -113,16 +116,22 @@ def replace_proj(m):
         print(f"  {proj_name}: no package.json, skipping")
         return block
     pkg = json.loads((full / 'package.json').read_text())
-    volta_node = pkg.get('volta', {}).get('node', '')
-    volta_pinned = bool(volta_node)
+    # The 2026-07-18 volta→mise migration: prefer mise.toml presence as the
+    # source of truth for "is this project version-pinned?". The volta
+    # block in package.json is left as a fallback for older code / forks.
+    mise_toml = full / 'mise.toml'
+    if mise_toml.exists():
+        toolchain_pinned = True
+    else:
+        toolchain_pinned = bool(pkg.get('volta', {}).get('node', ''))
     lf = full / 'pnpm-lock.yaml'
     lockfile_sha = hashlib.sha256(lf.read_bytes()).hexdigest()[:12] if lf.exists() else 'MISSING'
-    print(f"  {proj_name}: lockfile_sha={lockfile_sha} volta_pinned={volta_pinned}")
-    return update_block(block, lockfile_sha, volta_pinned, proj_name)
+    print(f"  {proj_name}: lockfile_sha={lockfile_sha} toolchain_pinned={toolchain_pinned}")
+    return update_block(block, lockfile_sha, toolchain_pinned, proj_name)
 
 text = proj_pattern.sub(replace_proj, text)
 inv_path.write_text(text.rstrip('\n') + '\n')
-print("  refreshed lockfile_sha256 + volta_pinned in inventory.yaml")
+print("  refreshed lockfile_sha256 + toolchain_pinned in inventory.yaml")
 PYEOF
 
 # ── packages/snap.yaml: refresh apps[] while preserving `purpose:` + runtime_bases ─
@@ -275,29 +284,36 @@ node_path = pathlib.Path('packages/node.yaml')
 text = node_path.read_text()
 
 # Defensive PATH prepend for the subprocesses below. Mirrors the pattern in
-# scripts/devtools-upgrade.ts exec() helper (which prepends VOLTA_BIN +
+# scripts/devtools-upgrade.ts exec() helper (which prepends MISE_BIN +
 # PNPM_BIN ahead of whatever the parent supplied). Required for hermes-
 # gateway.service and CI runners that sanitize PATH. The bash-level
 # USER_SHELL_LOADED guard at the top of capture.sh handles the parent
 # shell; this handles the python3 subprocess inside.
 #
-# Try multiple candidate locations for volta + pnpm bin dirs because
+# Try multiple candidate locations for mise + pnpm bin dirs because
 # subprocess env's HOME may not match the user's real HOME (hermes-gateway
 # subprocess inherits a different $HOME in some cases, CI runners often
-# set $HOME=/tmp/<id>). The first one that exists wins.
+# set $HOME=/tmp/<id>). The first one that exists wins. After the
+# 2026-07-18 migration: data-volume symlink invariant means mise's tree
+# lives at either ~/.local/share/mise/installs/*/bin (canonical via
+# symlink) OR /home/ubuntu/data/.local/share/mise/installs/*/bin
+# (resolved). The PATH probe tries both.
 _subprocess_env = os.environ.copy()
 _user_home = os.path.expanduser('~')
-_volta_candidates = [
-    os.environ.get('VOLTA_HOME', '').rstrip('/') + '/bin' if os.environ.get('VOLTA_HOME') else None,
-    f'{_user_home}/.volta/bin',
-    '/home/ubuntu/.volta/bin',  # mercury host default; harmless on other hosts
+_mise_candidates = [
+    f'{_user_home}/.local/share/mise/installs/node/24.18.0/bin',
+    f'{_user_home}/.local/bin',                                    # mise binary + shims
+    '/home/ubuntu/data/.local/share/mise/installs/node/24.18.0/bin',  # resolved path
+    '/home/ubuntu/.local/bin',
+    '/home/ubuntu/data/.local/bin',
 ]
 _pnpm_candidates = [
     os.environ.get('PNPM_HOME', '').rstrip('/') + '/bin' if os.environ.get('PNPM_HOME') else None,
     f'{_user_home}/.local/share/pnpm/bin',
-    '/home/ubuntu/.local/share/pnpm/bin',  # mercury host default
+    '/home/ubuntu/data/.local/share/pnpm/bin',  # mercury host default, resolved
+    '/home/ubuntu/.local/share/pnpm/bin',
 ]
-for cand in _volta_candidates:
+for cand in _mise_candidates:
     if cand and os.path.isdir(cand):
         _subprocess_env['PATH'] = cand + ':' + _subprocess_env.get('PATH', '')
         break
@@ -306,59 +322,55 @@ for cand in _pnpm_candidates:
         _subprocess_env['PATH'] = cand + ':' + _subprocess_env['PATH']
         break
 
-# ── default_node / default_npm / default_pnpm ─────────────────────────
+# ── default_node / default_pnpm (post-2026-07-18: only node + pnpm; npm is corepack-managed) ─
+# `mise ls --installed --json` outputs JSON like:
+#   {"version":"24.18.0","installed":true,"requested":true,"active":true,
+#    "tool":"node","path":"/home/ubuntu/data/.local/share/mise/installs/node/24.18.0"}
+# Per-tool listing: `mise ls --installed node --json` returns a list filtered
+# to just that tool. Concatenate node + pnpm into one parse pass.
 try:
-    volta_out = subprocess.check_output(
-        ['volta', 'list', 'all'], text=True, env=_subprocess_env
-    ).splitlines()
-except (subprocess.CalledProcessError, FileNotFoundError):
-    volta_out = []
+    mise_node = subprocess.check_output(
+        ['mise', 'ls', '--installed', 'node', '--json'], text=True, env=_subprocess_env
+    )
+    mise_pnpm = subprocess.check_output(
+        ['mise', 'ls', '--installed', 'pnpm', '--json'], text=True, env=_subprocess_env
+    )
+    import json as _json
+    mise_node_data = _json.loads(mise_node) if mise_node.strip() else []
+    mise_pnpm_data = _json.loads(mise_pnpm) if mise_pnpm.strip() else []
+except (subprocess.CalledProcessError, FileNotFoundError, _json.JSONDecodeError):
+    mise_node_data = mise_pnpm_data = []
 
-def extract_version(line, prefix):
-    """Extract version from a `volta list` line.
+def extract_active_version(rows):
+    """Return the version of the (single) active install, or ''."""
+    for row in rows:
+        if row.get('active'):
+            return row.get('version', '').lstrip('v')
+    return ''
 
-    Examples:
-      'runtime node@24.18.0 (default)'      → '24.18.0'  (prefix='runtime node')
-      'package-manager npm@11.17.0 (default)' → '11.17.0' (prefix='package-manager npm')
-      'package pnpm@11.9.0 / ...'            → '11.9.0'   (prefix='package pnpm')
-    """
-    if not line.startswith(prefix):
-        return None
-    parts = line.split()
-    if len(parts) < 2:
-        return None
-    token = parts[1]
-    # Strip trailing (default) and similar parens
-    token = re.sub(r'\(.*\)$', '', token)
-    # Take everything after the LAST '@'
-    if '@' in token:
-        return token.rsplit('@', 1)[1]
-    return token
+default_node = extract_active_version(mise_node_data)
+default_pnpm = extract_active_version(mise_pnpm_data)
+cached = [r.get('version', '').lstrip('v') for r in mise_node_data]
 
-# Find current versions
-default_node = default_npm = default_pnpm = ''
-cached = []
-for line in volta_out:
-    if line.startswith('runtime node'):
-        ver = extract_version(line, 'runtime node')
-        if ver:
-            cached.append(ver)
-            if '(default)' in line:
-                default_node = ver
-    elif line.startswith('package-manager npm') and '(default)' in line:
-        default_npm = extract_version(line, 'package-manager npm')
-    elif line.startswith('package pnpm') and '(default)' in line:
-        default_pnpm = extract_version(line, 'package pnpm')
-
-# Update default_node / default_npm / default_pnpm (within node_managers.volta)
-for field, value in [('default_node', default_node), ('default_npm', default_npm), ('default_pnpm', default_pnpm)]:
-    if value:
-        text = re.sub(
-            rf'^([ \t]+{field}: ).+$',
-            rf'\g<1>{value}',
-            text, count=1, flags=re.MULTILINE,
-        )
-        print(f"  {field} = {value}")
+# npm is corepack-managed per-project post-migration; we no longer
+# track default_npm in the inventory. Update default_node + default_pnpm.
+text = re.sub(
+    r'^([ \t]+default_node: ).+$',
+    rf'\g<1>{default_node}',
+    text, count=1, flags=re.MULTILINE,
+)
+print(f"  default_node = {default_node}")
+if default_pnpm:
+    # Update `default_pnpm:` (may be absent under `node_managers.mise` if
+    # we left it corepack-only; in that case this is a no-op).
+    new_text, n = re.subn(
+        r'^([ \t]+default_pnpm: ).+$',
+        rf'\g<1>{default_pnpm}',
+        text, count=1, flags=re.MULTILINE,
+    )
+    if n:
+        text = new_text
+        print(f"  default_pnpm = {default_pnpm}")
 
 # ── cached_runtimes: refresh list, preserve inline comments by version ─
 # Inline comments are like "- 24.16.0   # kept for openspec". We need to:
@@ -389,49 +401,19 @@ if existing_rt:
     # Append any versions that had comments but are gone (with note)
     for v, c in comments_by_version.items():
         if v not in seen and c:
-            new_lines.append(f'      - {v}   # stale; not in current volta cache')
+            new_lines.append(f'      - {v}   # stale; not in current mise cache')
     new_block = '    cached_runtimes:\n' + '\n'.join(new_lines) + '\n'
     text = text[:existing_rt.start()] + new_block + text[existing_rt.end():]
     print(f"  cached_runtimes: {len(cached)} live + stale-annotated")
 
-# ── globally_pinned_packages: rebuild from `volta list` ─────────────────
-# Format examples:
-#   package @fission-ai/openspec@1.4.1 / openspec / node@24.16.0 npm@built-in (default)
-#   package context-mode@1.0.162 / context-mode / node@24.16.0 npm@built-in (default)
-#   package pnpm@11.9.0 / pnpm, pnpx, pn, pnx / node@24.18.0 npm@built-in (default)
-# Token at index 1 is "<name>@<version>". Split on LAST '@' to get name and version.
-pkgs = []
-for line in volta_out:
-    if not line.startswith('package '):
-        continue
-    parts = line.split()
-    if len(parts) < 2 or '@' not in parts[1]:
-        continue
-    token = parts[1]
-    # Strip trailing (default) if present
-    token = re.sub(r'\(.*\)$', '', token)
-    name, ver = token.rsplit('@', 1)
-    # Quote scoped packages (start with '@'); unquoted otherwise (e.g., context-mode, pnpm)
-    needs_quotes = name.startswith('@')
-    node = ''
-    for tok in parts:
-        if tok.startswith('node@'):
-            node = tok[5:]
-    pkgs.append({'name': name, 'version': ver, 'node': node, 'quoted': needs_quotes})
-
-gp_match = re.search(
-    r'^[ \t]+globally_pinned_packages:\n((?:[ \t]+- .+\n(?:[ \t]+.+\n)*)*)',
-    text, re.MULTILINE,
-)
-if gp_match:
-    new_gp = '    globally_pinned_packages:\n'
-    for p in pkgs:
-        name_repr = f'"{p["name"]}"' if p['quoted'] else p['name']
-        new_gp += f'      - name: {name_repr}\n'
-        new_gp += f'        version: {p["version"]}\n'
-        new_gp += f'        node: {p["node"]}\n'
-    text = text[:gp_match.start()] + new_gp + text[gp_match.end():]
-    print(f"  globally_pinned_packages: {len(pkgs)} packages")
+# ── globally_pinned_packages: REMOVED in 2026-07-18 migration ──────────
+# Cron-managed global tool binaries (opencode-ai, context-mode, plannotator,
+# etc.) are no longer declared as `volta install <pkg>` runs; they live as
+# `npm install -g` standalone binaries whose upgrades are performed by
+# `scripts/devtools-upgrade.ts` directly. The inventory file
+# packages/node.yaml no longer carries a globally_pinned_packages section.
+# This block intentionally does nothing (left here as a marker for the
+# audit's grep hygiene).
 
 # ── hermes_bundled: refresh node + npm ──────────────────────────────────
 try:

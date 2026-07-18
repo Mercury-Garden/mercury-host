@@ -106,8 +106,14 @@ eval "$(starship init zsh)"
 
 export OPENFANG_HOME=/home/ubuntu/data/.mercury
 export PATH=/home/ubuntu/data/.mercury/bin:$PATH
-export VOLTA_HOME="$HOME/.volta"
-export PATH="$VOLTA_HOME/bin:$HOME/.local/bin:$PATH"
+# Toolchain — mise (formerly Volta, unmaintained 2025).
+# Lives on /home/ubuntu/data via ~/.local/share symlink — DO NOT replace
+# this with raw ~/.local/share paths; `mise activate` reads the symlink
+# naturally. Verified 2026-07-18 during the volta→mise migration.
+if command -v mise >/dev/null 2>&1; then
+  eval "$(mise activate zsh)"
+fi
+# End toolchain.
 # GITHUB_TOKEN must be set per-host from ~/.hermes/.env or 1password.
 # DO NOT commit a real token here. See ../secrets/inventory.yaml for the rotation procedure.
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
