@@ -2,7 +2,7 @@
 
 > Declarative state of `mercury` — the Oracle Cloud Ubuntu host that runs Mercury Garden.
 
-This repo describes **what this host is**: every systemd unit it owns, every nginx vhost it serves, the AI/agent tools it has installed, its shell/editor setup, the Node.js toolchain (Volta), the projects under `~/data/code/`, and where its secrets live (pointers only, never values).
+This repo describes **what this host is**: every systemd unit it owns, every nginx vhost it serves, the AI/agent tools it has installed, its shell/editor setup, the Node.js toolchain (mise — Volta was retired 2026-07-18), the projects under `~/data/code/`, and where its secrets live (pointers only, never values).
 
 The companion scripts — `scripts/capture.sh` and `scripts/audit.sh` — let you (a) regenerate the declarative files from the live host, and (b) check a live host against this repo and report drift.
 
@@ -155,7 +155,8 @@ authoritative source — this README mirrors it). At the time of writing:
 `*.log.*`, `__pycache__`, `*.pyc`, `*.wasm`, `*.map`, `node_modules`, `.pnpm-store`,
 `coverage`, `test-results`, `playwright-report`, `web/dist`, `.git`, `.cache`,
 `.cargo/registry`, `.rustup/toolchains`, `.npm`, `.bun`, `.local/share/uv`,
-`.local/share/pnpm/store`, `.local/share/Trash`, `.volta`, `.secrets/secrets.yaml`.
+`.local/share/pnpm/store`, `.local/share/Trash`, `.local/share/mise`, `.volta`
+(legacy — to be removed post-Phase-5; tar skips non-existent paths), `.secrets/secrets.yaml`.
 
 ### Restore from the local tarball
 

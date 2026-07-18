@@ -116,9 +116,12 @@ def replace_proj(m):
         print(f"  {proj_name}: no package.json, skipping")
         return block
     pkg = json.loads((full / 'package.json').read_text())
-    # The 2026-07-18 volta→mise migration: prefer mise.toml presence as the
-    # source of truth for "is this project version-pinned?". The volta
-    # block in package.json is left as a fallback for older code / forks.
+    # 2026-07-18 volta→mise migration: prefer mise.toml presence as the
+    # source of truth for "is this project version-pinned?". The
+    # package.json#volta block is kept as a defensive fallback only — it
+    # returns False for all current Mercury repos (no volta blocks
+    # since Phase 2 / PRs #52,#8,#9,#10,#26,#27) but a future repo or
+    # fork that still has one will still be detected as pinned.
     mise_toml = full / 'mise.toml'
     if mise_toml.exists():
         toolchain_pinned = True

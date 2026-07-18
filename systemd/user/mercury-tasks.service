@@ -4,12 +4,17 @@ After=network.target
 
 [Service]
 WorkingDirectory=/home/ubuntu/data/code/mercury-tasks
-ExecStart=/home/ubuntu/.volta/bin/pnpm start
-# systemd starts with a minimal PATH that excludes /home/ubuntu/.volta/bin.
-# pnpm's deps-status check spawns a sub-process named `pnpm` via PATH lookup,
-# which fails with ENOENT without this. Keep node on PATH for any spawned
-# helpers too.
-Environment=PATH=/home/ubuntu/.volta/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Post-2026-07-18 (volta→mise): pnpm is provisioned via Corepack on the
+# mise-managed Node 24.x install. `corepack pnpm` resolves the version
+# pinned in package.json#packageManager (pnpm@11.14.0). The mise-node bin
+# dir is first on PATH so node + corepack are picked up before system bins.
+# Keep node on PATH for any spawned helpers too.
+# NOTE: this file is a duplicate of mercury-tasks/deploy/systemd/mercury-tasks.service.
+# The live systemd unit on this host is a symlink pointing HERE (mercury-host),
+# while deploy.sh in mercury-tasks copies its own copy into ~/.config/systemd/user/.
+# Both files must stay in sync — see PR #55 / #72 for the Phase 4.9 migration.
+ExecStart=/home/ubuntu/data/.local/share/mise/installs/node/24/bin/corepack pnpm start
+Environment=PATH=/home/ubuntu/data/.local/share/mise/installs/node/24/bin:/home/ubuntu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=MERCURY_TASKS_HOST=127.0.0.1
 Environment=MERCURY_TASKS_PORT=7747
 Environment=MERCURY_TASKS_CONFIG=/home/ubuntu/.config/mercury-tasks/tokens.json

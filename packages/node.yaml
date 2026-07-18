@@ -21,7 +21,7 @@ node_managers:
     home: ~/.local/share/mise       # resolves to /home/ubuntu/data/.local/share/mise via symlink
     binary: ~/.local/bin/mise
     default_node: "24"               # floating within-major; resolves to latest 24.x (audit compares semver-aware)
-    default_pnpm: 11.14.0             # corepack-managed, declared via package.json#packageManager
+    default_pnpm: 11.14.0             # mise-managed via `mise use --global pnpm@11.14.0`; resolves via shims dir on PATH
     cached_runtimes:
       - 24.18.0
     migration_note: |
@@ -46,25 +46,34 @@ system_node:
   note: "No system node. All node access goes through mise (general) or hermes/node (gateway)."
 
 path_order_required:
-  # After the volta→mise migration (2026-07-18). Verified by the audit
-  # `capture.sh` PATH-walk validator. Order rationale:
-  # - ~/.local/share/mise/installs/node/24.18.0/bin  (mise node, data volume)
-  # - ~/.local/bin                                  (mise binary + pnpm shims)
-  # - ~/data/.mercury/bin                           (mercury-tasks CLI)
-  # - ~/.hermes/hermes-agent/venv/bin               (gateway venv)
-  # - ~/.hermes/hermes-agent/node_modules/.bin     (gateway tooling)
-  # - ~/.hermes/node/bin                            (Hermes-bundled Node 22.23.0)
-  # - ~/.cargo/bin                                  (rust)
+  # Post-volta→mise migration (2026-07-18), extended for mise-managed pnpm
+  # (2026-07-18, this PR). Verified by the audit `capture.sh` PATH-walk
+  # validator. Order rationale (what `eval "$(mise activate zsh)"` actually
+  # prepends to PATH, given mise on PATH at startup):
+  # - ~/.local/share/mise/installs/pnpm/11.14.0     (mise-managed pnpm bin)
+  #                                                 — mise activate prepends
+  #                                                 pnpm BEFORE node because
+  #                                                 pnpm is configured globally;
+  #                                                 node comes second.
+  # - ~/.local/share/mise/installs/node/24/bin      (mise node 24.18.0 bin)
+  # - ~/.local/bin                                  (mise binary itself)
+  # - ~/.cargo/bin                                  (rust; inherited from
+  #                                                 ~/.zshenv sourcing
+  #                                                 ~/.cargo/env, which prepends
+  #                                                 cargo via rustup init —
+  #                                                 ~/.zshenv runs BEFORE
+  #                                                 ~/.zshrc so cargo is added
+  #                                                 before mise activate, and
+  #                                                 mise activate prepends ON
+  #                                                 TOP of cargo)
   # - system paths unchanged
-  # Note: mise-managed pnpm (via Corepack, declared in package.json)
-  #       shadows nothing else here; `pnpm -v` resolves to the same
-  #       binary across all 5 mercury repos post-migration.
-  - ~/.local/share/mise/installs/node/24.18.0/bin
+  # Note: the gateway systemd units deliberately put hermes/node/bin BEFORE
+  #       the mise install dirs (PR #70) so the hermes-bundled node wins for
+  #       gateway processes — but for interactive shells the mise install
+  #       dirs win for any non-rust tool.
+  - ~/.local/share/mise/installs/pnpm/11.14.0
+  - ~/.local/share/mise/installs/node/24/bin
   - ~/.local/bin
-  - ~/data/.mercury/bin
-  - ~/.hermes/hermes-agent/venv/bin
-  - ~/.hermes/hermes-agent/node_modules/.bin
-  - ~/.hermes/node/bin
   - ~/.cargo/bin
   - /usr/local/sbin
   - /usr/local/bin
