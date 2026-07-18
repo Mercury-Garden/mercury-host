@@ -532,45 +532,139 @@ if jobs_file.exists():
         print(f"  hermes.jobs: JSON parse error: {e}")
 print(f"  hermes.jobs: {len(hermes_jobs)} jobs")
 
-# Replace the hermes.jobs: block (empty OR populated) with the live block.
-# The previous regex only matched `    jobs: []` (the empty-list form), so
-# per-id drift on a populated block — like a cron id rotating via
-# register-*-cron.sh — silently survived capture.sh refreshes. Audit
-# `count` only, so the per-id discrepancy was invisible until someone
-# hand-edited it (PR #63 did this for devtools-upgrade's id rotation).
+# Replace the hermes.jobs: block using a per-entry diff that preserves
+# hand-written comments. The previous fix (PR #64) replaced the whole
+# block atomically, which silently stripped comments like:
+#
+#         # Watchdog for the Hermes gateway on :8644. no_agent cron that runs
+#         # ~/.hermes/scripts/gateway-health-check.sh every 5 min; ...
+#
+# Per-entry diff is the right shape because the most common drift class
+# is **cron id rotation** from `register-*-cron.sh`'s clean re-register
+# contract — the block's structure (entries + comments + ordering) is
+# stable for long periods, only the `id:` field changes. We update the
+# `id:` line where needed and leave everything else verbatim. Comments,
+# whitespace, and entry ordering are all preserved.
 #
 # Block shape (default-profile only — mercury-butler lives under
 # hermes_profiles[] and capture.sh does not touch it):
 #
 #     jobs:
-#       - id: xxx
+#       - id: xxx              ← entry marker (6 spaces + "- id:")
 #         name: yyy
 #         schedule: "..."
-#       - id: zzz
+#         # comment           ← preserved verbatim
+#       - id: zzz              ← next entry
 #         ...
 #                       ← block ends at first ≤4-space-indent, non-blank line
 #
-# We match `    jobs:` (any same-line value or none) plus all subsequent
-# lines indented > 4 spaces, and replace the whole block atomically.
-hermes_block_re = re.compile(
-    r'^(    jobs:)[ \t]*([^\n]*)\n'
-    r'((?:^[ ]{6,}[^\n]*\n?)*)',
-    re.MULTILINE,
-)
-def fill_hermes_jobs(m):
-    if not hermes_jobs:
-        return m.group(0)  # keep the existing block (empty or populated) if no jobs
-    # m.group(1) is `    jobs:` (with the colon, no trailing space). Build the
-    # new block from scratch — we don't preserve hand-written comments inside
-    # the jobs list because the entries are regenerated from jobs.json.
-    new = '    jobs:\n'
-    for j in hermes_jobs:
-        new += f"      - id: {j['id']}\n"
-        new += f"        name: {j['name']}\n"
-        new += f"        schedule: \"{j['schedule']}\"\n"
-    return new
+# Strategy:
+#   1. Find `    jobs:` line, capture everything up to next sibling key.
+#   2. Split on entry markers (`      - id:`), preserving each entry verbatim.
+#   3. Build `name -> live_id` lookup from jobs.json.
+#   4. For each inventory entry: if `name` matches a jobs.json entry AND
+#      `id:` line differs from the live id, replace JUST the `id:` line.
+#      Otherwise leave the entry untouched.
+#   5. For each jobs.json entry whose name isn't in inventory, append a
+#      new entry to the end of the block.
+#   6. If hermes_jobs is empty (parse failure), leave the block untouched.
 
-text = hermes_block_re.sub(fill_hermes_jobs, text, count=1)
+hermes_block_start_re = re.compile(r'^(    jobs:)[ \t]*[^\n]*\n', re.MULTILINE)
+
+def update_hermes_jobs(text):
+    m = hermes_block_start_re.search(text)
+    if not m:
+        print(f"  hermes.jobs: `    jobs:` line not found, skipping")
+        return text
+    # Capture only the `    jobs:` portion of the matched line — strip any
+    # same-line value (`[]`, comments, etc.). The replacement ALWAYS starts
+    # with a bare `    jobs:\n` so the parsed body line-for-line matches
+    # what we wrote.
+    prefix = f"{m.group(1)}\n"
+    # Scan forward line by line until we hit a line at <6-space indent
+    # (the next sibling key like `  hermes_profiles:` or `# Per-profile`
+    # comment at 2-space indent). Collect the body verbatim.
+    body_lines = []
+    i = m.end()
+    while i < len(text):
+        nl = text.find('\n', i)
+        if nl == -1:
+            nl = len(text)
+        line = text[i:nl + 1]
+        if line and not line[0].isspace():
+            # Non-whitespace start = end of block (a new top-level key).
+            break
+        # Count leading spaces. The block is entries at ≥6 spaces; the
+        # terminating line is at ≤4 spaces (sibling key or comment).
+        stripped = line.lstrip(' ')
+        leading = len(line) - len(stripped)
+        if leading < 6:
+            break
+        body_lines.append(line)
+        i = nl + 1
+    body = ''.join(body_lines)
+    entries = []  # list of (raw_text, name_or_None, id_value_or_None)
+    current = None
+    for line in body.splitlines(keepends=True):
+        m_id = re.match(r'^(      - id:\s*)([^\s#]*)(.*)$', line)
+        if m_id:
+            if current is not None:
+                entries.append(current)
+            current = {'raw': [line], 'id': m_id.group(2).strip(), 'name': None}
+            continue
+        m_name = re.match(r'^(\s+name:\s*)(.+?)\s*$', line)
+        if m_name and current is not None:
+            current['name'] = m_name.group(2).strip()
+        if current is not None:
+            current['raw'].append(line)
+    if current is not None:
+        entries.append(current)
+
+    # Build name -> live_id lookup from hermes_jobs.
+    live_by_name = {j['name']: j['id'] for j in hermes_jobs if j.get('name')}
+    inventory_names = set()
+
+    # Per-entry update: only touch the `id:` line.
+    drift_count = 0
+    new_block_lines = []
+    for entry in entries:
+        name = entry['name']
+        inventory_names.add(name)
+        if name in live_by_name and entry['id'] != live_by_name[name]:
+            new_id = live_by_name[name]
+            for line in entry['raw']:
+                if re.match(r'^\s*- id:\s', line):
+                    new_block_lines.append(re.sub(
+                        r'^(\s*- id:\s*)[^\s#]*',
+                        lambda mm, new_id=new_id: f"{mm.group(1)}{new_id}",
+                        line, count=1,
+                    ))
+                    drift_count += 1
+                else:
+                    new_block_lines.append(line)
+        else:
+            # No drift — entry passes through verbatim (preserves comments).
+            new_block_lines.extend(entry['raw'])
+
+    # Append new jobs (in jobs.json but not in inventory).
+    appended = 0
+    for j in hermes_jobs:
+        if j.get('name') and j['name'] not in inventory_names:
+            new_block_lines.append(f"      - id: {j['id']}\n")
+            new_block_lines.append(f"        name: {j['name']}\n")
+            new_block_lines.append(f"        schedule: \"{j['schedule']}\"\n")
+            inventory_names.add(j['name'])
+            appended += 1
+
+    if drift_count or appended:
+        print(f"  hermes.jobs: {drift_count} id(s) refreshed, {appended} entry(s) appended")
+    else:
+        print(f"  hermes.jobs: 0 drift (block current)")
+
+    new_block = ''.join(new_block_lines)
+    return text[:m.start()] + prefix + new_block + text[i:]
+
+text = update_hermes_jobs(text)
 
 # ── 3. user_crontab: parse `crontab -l` ──────────────────────────────
 import subprocess
