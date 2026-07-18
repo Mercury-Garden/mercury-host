@@ -151,7 +151,7 @@ cron:
       - id: b5586aeda0f3
         name: better-bet-knockout-daily-update
         schedule: "30 12 * * *"
-      - id: 98b672bf950a
+      - id: 45125c66ddd4
         name: devtools-upgrade
         schedule: "0 11 * * *"
       - id: f9c44d64925e
@@ -254,12 +254,12 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-14T08-00-31Z"
-  last_size_mb: 713
-  last_file_count: 26754
-  last_sha256: "e1b0fca7c53446b1b23126960731305b6b130532c13f7b2c5980070f6948c8a5"
+  last_run_at: "2026-07-18T08-00-41Z"
+  last_size_mb: 733
+  last_file_count: 26811
+  last_sha256: "e88877140739393e3491cb152830c394f10c3966e9bd51bd7212de75452eb590"
   last_verify_ok: "5/5"
-  last_verify_at: "2026-07-14T08-03-43Z"
+  last_verify_at: "2026-07-18T08-04-59Z"
   tarballs_on_disk: 7
   # ── Backup unit duplication history (resolved 2026-07-14) ────────────────
   # Two `mercury-state-backup.{timer,service}` units exist on this host,
