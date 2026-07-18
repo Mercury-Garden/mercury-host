@@ -354,12 +354,37 @@ cached = [r.get('version', '').lstrip('v') for r in mise_node_data]
 
 # npm is corepack-managed per-project post-migration; we no longer
 # track default_npm in the inventory. Update default_node + default_pnpm.
-text = re.sub(
-    r'^([ \t]+default_node: ).+$',
-    rf'\g<1>{default_node}',
-    text, count=1, flags=re.MULTILINE,
+#
+# Important: don't blindly overwrite `default_node:` with the literal
+# installed version — if the YAML uses the floating form (bare major,
+# e.g. `"24"`), we should preserve it so subsequent capture.sh runs
+# don't keep demoting the float to a pin. Only overwrite when the
+# existing value is missing or already pinned (e.g. "24.18.0").
+existing_default_node = re.search(
+    r'^[ \t]+default_node:\s*(.+?)\s*(?:#.*)?$',
+    text, re.MULTILINE,
 )
-print(f"  default_node = {default_node}")
+preserve_float = False
+if existing_default_node:
+    raw = existing_default_node.group(1).strip()
+    if raw.startswith('"') or raw.startswith("'"):
+        raw = raw[1:-1]
+    # If the existing value has fewer parts than a typical pin (2 vs 3
+    # dots), it's a float and we preserve it. Otherwise (already pinned
+    # or empty), overwrite with the live installed version.
+    if raw and raw.count('.') < 2:
+        preserve_float = True
+        print(f"  default_node = {raw} (float preserved; live version {default_node})")
+    else:
+        print(f"  default_node = {default_node} (overwriting pin)")
+else:
+    print(f"  default_node = {default_node}")
+if not preserve_float:
+    text = re.sub(
+        r'^([ \t]+default_node: ).+$',
+        rf'\g<1>{default_node}',
+        text, count=1, flags=re.MULTILINE,
+    )
 if default_pnpm:
     # Update `default_pnpm:` (may be absent under `node_managers.mise` if
     # we left it corepack-only; in that case this is a no-op).

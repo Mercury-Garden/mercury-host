@@ -35,21 +35,27 @@ drift() { printf '✗ DRIFT: %s\n' "$*"; DRIFT=$((DRIFT + 1)); }
 ok()    { printf '✓ %s\n' "$*"; }
 
 require_yaml_field() {
-  # Recursively read a nested-ish YAML key. Handles the leading "  " indent
-  # we use for sub-keys under node_managers.* in packages/node.yaml.
+  # Read a nested-ish YAML key, stripping any inline trailing comment.
+  # The naive awk approach was grabbing inline comments after the value
+  # (e.g. `default_node: "24"  # comment` → `"24" # comment`). Python
+  # does it correctly and the script already depends on python3 for the
+  # downstream YAML parses.
   local file="$1" key="$2"
-  awk -v k="$key" '
-    {
-      stripped = $0
-      sub(/^[ \t]+/, "", stripped)
-      if (stripped ~ "^"k":") {
-        sub("^"k":[ \t]*", "", stripped)
-        gsub(/[ \t]+$/, "", stripped)
-        print stripped
-        exit
-      }
-    }
-  ' "$file"
+  python3 - "$file" "$key" <<'PYEOF'
+import re, sys
+file, key = sys.argv[1], sys.argv[2]
+with open(file) as f:
+    for line in f:
+        m = re.match(rf'^\s*{re.escape(key)}\s*:\s*(.*?)\s*(?:#.*)?$', line)
+        if m:
+            v = m.group(1).strip()
+            # strip surrounding quotes
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                v = v[1:-1]
+            print(v)
+            sys.exit(0)
+sys.exit(1)
+PYEOF
 }
 
 echo "=== mercury-host audit — $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
@@ -65,23 +71,59 @@ fi
 
 EXPECT_NODE=$(require_yaml_field "$PKG_NODE" "default_node")
 # default_pnpm is corepack-managed per-project; fall back to "11.14.0" if absent
-EXPECT_PNPM=$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$PKG_NODE" 2>/dev/null)
+EXPECT_PNPM=$(require_yaml_field "$PKG_NODE" "default_pnpm")
 [ -z "$EXPECT_PNPM" ] && EXPECT_PNPM="11.14.0"
 
-# `mise current --no-color` prints lines like:
-#   node    24.18.0   path: .../node/24.18.0/bin/node
-#   pnpm    11.14.0    path: .../node/24.18.0/bin/pnpm
-# Extract tool name and version via awk; trim leading whitespace.
-ACTUAL_NODE=$(mise current --no-color 2>/dev/null | awk '/^node[[:space:]]/ {print $2; exit}')
-ACTUAL_PNPM=$(mise current --no-color 2>/dev/null | awk '/^pnpm[[:space:]]/ {print $2; exit}')
+# `mise -q current [PLUGIN]` output format (verified mise 2026.7.7):
+#   `mise -q current`         → "node 24.18.0\n"   (one line per tool, tool + version)
+#   `mise -q current node`    → "24.18.0\n"        (version only, no tool prefix)
+#   `mise -q current pnpm`    → "11.14.0\n"        (version only, no tool prefix)
+#
+# Use the tool-prefixed form so a single awk pass handles both. `-q` (quiet)
+# suppresses mise's non-color noise. `--no-color` is a mise global flag, NOT
+# accepted as `mise current --no-color`; passing it after the subcommand exits
+# 2 and, under `set -euo pipefail`, silently aborts the audit before the
+# node/pnpm drift lines print. Verified 2026-07-18.
+ACTUAL_NODE=$(mise -q current 2>/dev/null | awk '/^node[[:space:]]/ {print $2; exit}')
+ACTUAL_PNPM=$(mise -q current 2>/dev/null | awk '/^pnpm[[:space:]]/ {print $2; exit}')
 
-if [ "$ACTUAL_NODE" = "$EXPECT_NODE" ]; then
-  ok "default node = $EXPECT_NODE"
+# Semver-aware comparison: `default_node` may be a bare major (e.g. `"24"`)
+# or a partial (e.g. `"24.18"`); both should match a more-specific installed
+# version (`24.18.0`). We split on "." and compare left-to-right. Three
+# cases:
+#   - same arity: exact match
+#   - actual has more parts than expected: actual is a refinement (e.g.
+#     expected "24", actual "24.18.0") → match
+#   - expected has more parts than actual: drift (e.g. expected "24.18.0",
+#     actual "24.18")
+#   - any differing component: drift
+# Use python (the script already requires it for the YAML parses downstream)
+# so we get a real semver split rather than bash arithmetic.
+semver_matches() {
+  local expected="$1" actual="$2"
+  python3 - "$expected" "$actual" <<'PYEOF'
+import sys
+exp, act = sys.argv[1], sys.argv[2]
+exp_parts = exp.split('.')
+act_parts = act.split('.')
+# Pad actual to expected arity with 0s? No — if expected is shorter, it's
+# a prefix and any actual that starts with it is a match.
+if len(act_parts) < len(exp_parts):
+    sys.exit(1)
+for i, e in enumerate(exp_parts):
+    if act_parts[i] != e:
+        sys.exit(1)
+sys.exit(0)
+PYEOF
+}
+
+if [ "$ACTUAL_NODE" = "$EXPECT_NODE" ] || semver_matches "$EXPECT_NODE" "$ACTUAL_NODE"; then
+  ok "default node = $EXPECT_NODE (resolved to $ACTUAL_NODE)"
 else
   drift "default node = '$ACTUAL_NODE' (expected '$EXPECT_NODE')"
 fi
-if [ "$ACTUAL_PNPM" = "$EXPECT_PNPM" ]; then
-  ok "default pnpm = $EXPECT_PNPM (corepack)"
+if [ "$ACTUAL_PNPM" = "$EXPECT_PNPM" ] || semver_matches "$EXPECT_PNPM" "$ACTUAL_PNPM"; then
+  ok "default pnpm = $EXPECT_PNPM (corepack, resolved to $ACTUAL_PNPM)"
 else
   # Not a hard drift — corepack may not have a default until first project use.
   note "default pnpm = '$ACTUAL_PNPM' (expected '$EXPECT_PNPM' — corepack)"
