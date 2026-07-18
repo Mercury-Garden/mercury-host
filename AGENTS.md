@@ -78,8 +78,8 @@ catches most issues before push.
 
 ## Scripts: behavioral quirks worth knowing
 
-- **`audit.sh` reconstructs the user's PATH before checking volta.**
-  Hermes-agent runs under a venv-isolated PATH that hides volta; without
+- **`audit.sh` reconstructs the user's PATH before checking mise.**
+  Hermes-agent runs under a venv-isolated PATH that hides mise; without
   the `~/.zshrc` re-source the audit would falsely report drift. The
   script guards this with `USER_SHELL_LOADED`. Always run it from an
   interactive shell, not from a service account.
@@ -91,7 +91,9 @@ catches most issues before push.
   comments on `cached_runtimes`. Always review the diff (`git diff`)
   before committing.
 - **`restore.sh` is NOT end-to-end idempotent.** It installs apt + snap,
-  pins Volta, restores systemd user units, but nginx vhost deploy is
+  pins mise via `mise use --global node@<ver>` from
+  `packages/node.yaml#default_node`, restores systemd user units, but
+  nginx vhost deploy is
   manual (copy to `/etc/nginx/sites-available/`, symlink to
   `sites-enabled/`, `nginx -t && systemctl reload nginx`). The final
   echo lists every manual step.
@@ -160,17 +162,28 @@ catches most issues before push.
   (`systemd/user/*.service`) with Ubuntu-package units (`nginx.service`,
   `cron.service`, `ollama.service`) and explicitly external ones
   (`/usr/lib/systemd/...` paths) with comments saying "do not own".
-- **Two parallel node toolchains exist.** `volta` (user-facing, pinned
-  via `packages/node.yaml`) and `~/.hermes/node` (Hermes gateway's
-  bundled runtime, not user-managed — capture.sh refreshes both). PATH
-  order is `packages/node.yaml → path_order_required` (pnpm first, then
-  volta, then hermes later). Audit checks PATH starts with
-  `~/.local/share/pnpm/bin`.
-- **Every tracked project must have `volta.node` pinned in
-  `package.json`** AND a `lockfile_sha256` in `inventory.yaml`. The
-  audit checks both — drift in either is reported as
-  `REPRODUCIBILITY`. `capture.sh` regenerates the lockfile SHA but the
-  volta pin is the project's responsibility.
+- **One user-facing node toolchain (`mise`) plus the hermes-bundled
+  runtime.** `mise` (the active toolchain as of the 2026-07-18 migration
+  from unmaintained volta) is pinned at `packages/node.yaml →
+  default_node:` and `inventory.yaml → projects[].pinned_node:`. Both are
+  currently the floating form `"24"` (within-major), which mise
+  interprets as "latest installed 24.x" (currently 24.18.0). The audit
+  uses semver-aware comparison: `expected` may be a prefix of `actual`.
+  PATH order per `path_order_required` is
+  `~/.local/share/pnpm/bin` first, then
+  `~/.local/share/mise/installs/node/24/bin`, then `~/.hermes/...`. The
+  `~/.hermes/node` runtime is hermes-internal (not user-managed) and
+  capture.sh refreshes both.
+- **The global mise config lives at `~/.config/mise/config.toml`** and
+  is **not in this repo** (per-host artifact). It is written by
+  `scripts/restore.sh` from `packages/node.yaml#default_node`. Do NOT
+  edit it by hand — the next restore.sh invocation will overwrite it.
+  Edit `packages/node.yaml#default_node` instead.
+- **Every tracked project must have `node = "<ver>"` in `mise.toml`**
+  (the repo-level file at `<repo>/mise.toml`) AND a `lockfile_sha256` in
+  `inventory.yaml`. The audit checks both — drift in either is reported
+  as `REPRODUCIBILITY`. `capture.sh` regenerates the lockfile SHA but
+  the mise.toml pin is the project's responsibility.
 - **The `state_backup:` block in `inventory.yaml` has a `max_age_hours:
   36` field.** Audit fails if no fresh tarball within 36h. Don't change
   this without understanding the backup timer schedule (daily 03:00

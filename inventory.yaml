@@ -385,7 +385,7 @@ node_managers:
     install_method: https://mise.run
     cli_version: 2026.7.7
     home: ~/.local/share/mise
-    default_node: 24.18.0
+    default_node: "24"               # floating within-major; resolves to latest 24.x (audit compares semver-aware)
     default_pnpm: 11.14.0
 
   hermes_bundled:
@@ -531,17 +531,17 @@ projects:
   - path: ~/data/code/mercury-tasks
     repo: Mercury-Garden/mercury-tasks
     package_manager: pnpm@11.14.0
-    pinned_node: 24.18.0
+    pinned_node: "24"                 # floating; matches mise.toml in repo
     expected_branch: main
-    lockfile_sha256: 13e0dad509cb    # capture.sh: refreshed mercury-tasks
+    lockfile_sha256: 24e0a6314215    # capture.sh: refreshed mercury-tasks
     owns_subdomain: tasks.mercury.garden
-    toolchain_pinned: true   # capture.sh: vite-fired — see packages/node.yaml#node_managers
+    toolchain_pinned: true
 
   - path: ~/data/code/better-bet
     repo: Mercury-Garden/better-bet
     package_manager: pnpm@11.14.0
-    pinned_node: 24.18.0
-    expected_branch: fix/pollapp-api-contract-drift   # local working branch
+    pinned_node: "24"                 # floating; matches mise.toml in repo
+    expected_branch: main             # fixed 2026-07-18 (was: fix/pollapp-api-contract-drift, branch gone from origin)
     lockfile_sha256: 94c13fb9894a    # capture.sh: refreshed better-bet
     owns_subdomain: null
     toolchain_pinned: true
@@ -549,7 +549,7 @@ projects:
   - path: ~/data/code/scriptcaster
     repo: Mercury-Garden/scriptcaster
     package_manager: pnpm@11.14.0
-    pinned_node: 24.18.0
+    pinned_node: "24"                 # floating; matches mise.toml in repo
     expected_branch: main
     lockfile_sha256: a5904bd36258    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
@@ -558,8 +558,8 @@ projects:
   - path: ~/data/code/webhook-server
     repo: Mercury-Garden/webhook-server
     package_manager: pnpm@11.14.0
-    pinned_node: 24.18.0
-    expected_branch: fix/register-auto-arc-advance-cron-script-args
+    pinned_node: "24"                 # floating; matches mise.toml in repo
+    expected_branch: main             # fixed 2026-07-18 (was: fix/register-auto-arc-advance-cron-script-args, branch gone from origin)
     lockfile_sha256: 292791fbfc6e    # capture.sh: refreshed webhook-server
     owns_subdomain: webhook.mercury.garden
     toolchain_pinned: true
@@ -567,7 +567,7 @@ projects:
   - path: ~/data/code/x-digest
     repo: Mercury-Garden/x-digest
     package_manager: pnpm@11.14.0
-    pinned_node: 24.18.0
+    pinned_node: "24"                 # floating; matches mise.toml in repo
     expected_branch: main
     lockfile_sha256: 3e4e9798a86a    # capture.sh: refreshed x-digest
     owns_subdomain: null
@@ -600,7 +600,7 @@ openwiki:
   binary:
     expected_on_path: openwiki
     installed_via: "npm install -g openwiki"   # post-2026-07-18 (was: volta install openwiki)
-    pinned_to_node: 24.18.0
+    pinned_to_node: "24"               # floating; matches the global mise toolchain pin
     refresh: scripts/devtools-upgrade.ts (cron-managed daily upgrade)
   provider: anthropic              # matches OPENWIKI_PROVIDER in ~/.openwiki/.env
   base_url: https://api.minimax.io/anthropic   # matches ANTHROPIC_BASE_URL in ~/.openwiki/.env

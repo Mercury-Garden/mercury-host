@@ -80,8 +80,12 @@ const HOME = homedir()
 //   2. ${HOME}/.local/share/mise                 (via data-volume symlink)
 //   3. /home/ubuntu/.local/share/mise            (legacy / boot-volume fallback)
 // MISE_DATA_DIR is whichever exists. MISE_NODE_BIN is the active node's
-// bin dir under installs/node/<ver>/bin (resolved at module load by
-// shelling out to `mise current --no-color`). Prepended to every exec().
+// MISE_NODE_BIN is the active node's bin dir under installs/node/<ver>/bin
+// (resolved at module load by shelling out to `mise -q current [PLUGIN]`).
+// Prepended to every exec().
+// Note: `--no-color` is a mise global flag, NOT accepted as `mise current --no-color`;
+// passing it after the subcommand exits 2. `-q` is the supported per-subcommand
+// quiet flag. Verified against mise 2026.7.7 on 2026-07-18.
 const MISE_DATA_DIR = (() => {
   for (const cand of [
     process.env.MISE_DATA_DIR,
@@ -95,10 +99,12 @@ const MISE_DATA_DIR = (() => {
 
 let MISE_NODE_BIN = ''
 try {
-  MISE_NODE_BIN = execSync(`"${MISE_DATA_DIR}/../bin/mise" current --no-color`, { encoding: 'utf8' })
-    .split('\n').find((l) => l.startsWith('node'))?.split(/\s+/)[1] ? '' : ''
-  // Resolve the node bin dir by reading the live mise node-version
-  const nodeVer = execSync(`"${MISE_DATA_DIR}/../bin/mise" current node --no-color`, { encoding: 'utf8' }).trim().replace(/^node\s+/, '')
+  // Resolve the node bin dir by reading the live mise node-version.
+  // `mise -q current node` prints just "24.18.0\n" (no tool prefix);
+  // `mise -q current` prints "node 24.18.0\n" (with prefix). We use the
+  // prefixed form so the parsing pattern is robust.
+  const nodeVer = execSync(`"${MISE_DATA_DIR}/../bin/mise" -q current`, { encoding: 'utf8' })
+    .split('\n').find((l) => l.startsWith('node'))?.split(/\s+/)[1] ?? ''
   MISE_NODE_BIN = join(MISE_DATA_DIR, 'installs', `node`, nodeVer, 'bin')
 } catch {
   // best-effort; fall through to symlinked path
