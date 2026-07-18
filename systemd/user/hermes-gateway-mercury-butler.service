@@ -8,7 +8,7 @@ StartLimitIntervalSec=0
 Type=simple
 ExecStart=/home/ubuntu/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main --profile mercury-butler gateway run
 WorkingDirectory=/home/ubuntu/.hermes/profiles/mercury-butler
-Environment="PATH=/home/ubuntu/.hermes/hermes-agent/venv/bin:/home/ubuntu/.hermes/hermes-agent/node_modules/.bin:/home/ubuntu/.volta/bin:/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=/home/ubuntu/data/.local/share/mise/installs/node/24.18.0/bin:/home/ubuntu/.hermes/hermes-agent/venv/bin:/home/ubuntu/.hermes/hermes-agent/node_modules/.bin:/home/ubuntu/.local/bin:/home/ubuntu/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="VIRTUAL_ENV=/home/ubuntu/.hermes/hermes-agent/venv"
 Environment="HERMES_HOME=/home/ubuntu/.hermes/profiles/mercury-butler"
 Restart=always
