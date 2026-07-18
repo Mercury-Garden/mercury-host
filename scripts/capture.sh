@@ -532,18 +532,38 @@ if jobs_file.exists():
         print(f"  hermes.jobs: JSON parse error: {e}")
 print(f"  hermes.jobs: {len(hermes_jobs)} jobs")
 
-# Replace the hermes.jobs: empty list with a populated block.
-# Match exactly the line `    jobs: []` (with optional trailing whitespace + comment).
+# Replace the hermes.jobs: block (empty OR populated) with the live block.
+# The previous regex only matched `    jobs: []` (the empty-list form), so
+# per-id drift on a populated block — like a cron id rotating via
+# register-*-cron.sh — silently survived capture.sh refreshes. Audit
+# `count` only, so the per-id discrepancy was invisible until someone
+# hand-edited it (PR #63 did this for devtools-upgrade's id rotation).
+#
+# Block shape (default-profile only — mercury-butler lives under
+# hermes_profiles[] and capture.sh does not touch it):
+#
+#     jobs:
+#       - id: xxx
+#         name: yyy
+#         schedule: "..."
+#       - id: zzz
+#         ...
+#                       ← block ends at first ≤4-space-indent, non-blank line
+#
+# We match `    jobs:` (any same-line value or none) plus all subsequent
+# lines indented > 4 spaces, and replace the whole block atomically.
 hermes_block_re = re.compile(
-    r'^(    jobs: )\[\][ \t]*(#[^\n]*)?\n',
+    r'^(    jobs:)[ \t]*([^\n]*)\n'
+    r'((?:^[ ]{6,}[^\n]*\n?)*)',
     re.MULTILINE,
 )
 def fill_hermes_jobs(m):
     if not hermes_jobs:
-        return m.group(0)  # keep `jobs: []` if no jobs
-    # m.group(1) is `    jobs: ` (with trailing space). Strip it.
-    key_part = m.group(1).rstrip()
-    new = key_part + ':\n'
+        return m.group(0)  # keep the existing block (empty or populated) if no jobs
+    # m.group(1) is `    jobs:` (with the colon, no trailing space). Build the
+    # new block from scratch — we don't preserve hand-written comments inside
+    # the jobs list because the entries are regenerated from jobs.json.
+    new = '    jobs:\n'
     for j in hermes_jobs:
         new += f"      - id: {j['id']}\n"
         new += f"        name: {j['name']}\n"
