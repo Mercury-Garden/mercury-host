@@ -49,8 +49,11 @@ fi
 echo "[mise] configuring default toolchain"
 # `default_node` + `default_pnpm` are read from packages/node.yaml under
 # node_managers.mise; we only set the ones that are explicit. pnpm is
-# corepack-managed per-project — the global pin (default_pnpm) is for
-# tooling outside of any repo (rare).
+# managed as a first-class mise tool — `mise use --global pnpm@<ver>`
+# installs it under ~/.local/share/mise/installs/pnpm/<ver>/ and the
+# ~/.local/share/mise/shims/ directory exposes a `pnpm` shim on PATH
+# that routes to it. This replaces the pre-migration PNPM_HOME block
+# in ~/.zshrc (which is now redundant and removed in this PR).
 mise use --global "node@$(awk '/^ *default_node:/{gsub(/['\''"]/, ""); print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
 if grep -q '^ *default_pnpm:' "$REPO_ROOT/packages/node.yaml"; then
   mise use --global "pnpm@$(awk '/^ *default_pnpm:/{gsub(/['\''"]/, ""); print $2; exit}' "$REPO_ROOT/packages/node.yaml")"
@@ -59,13 +62,13 @@ fi
 # ── 3.5. Shell startup files (post-2026-07-18 deployment gap fix) ─────
 # shell/.zshenv + shell/.profile are pure declarative (no per-host
 # customizations). shell/.zshrc.template is a template — the live
-# ~/.zshrc is a hand-maintained overlay that adds GITHUB_TOKEN,
-# the pnpm PATH block, and plannotator env vars. Restoring .zshrc
-# blindly would clobber those customizations. Instead, we copy the
-# two pure files (.zshenv, .profile) and patch the live .zshrc to
-# swap the toolchain block (volta → mise) without touching anything
-# else. The patch is idempotent: if the file already has the mise
-# block, this is a no-op.
+# ~/.zshrc is a hand-maintained overlay that adds GITHUB_TOKEN and
+# plannotator env vars. Restoring .zshrc blindly would clobber those
+# customizations. Instead, we copy the two pure files (.zshenv, .profile)
+# and patch the live .zshrc to:
+#   1. Swap the toolchain block (volta → mise)
+#   2. Remove the now-redundant PNPM_HOME PATH block (pnpm is mise-managed)
+# Both patches are idempotent.
 echo "[shell] deploying shell startup files"
 SHELL_DIR="$REPO_ROOT/shell"
 # Literal string marker that identifies a mise-activated .zshrc. Used by the
@@ -90,9 +93,10 @@ else
   echo "  ~/.profile already in sync"
 fi
 
-# .zshrc: surgical patch — swap VOLTA_HOME+PATH for mise activate.
-# Idempotent: detect either pre-migration (volta) or post-migration
-# (mise) state and skip if already correct.
+# .zshrc: surgical patch — swap VOLTA_HOME+PATH for mise activate,
+# and remove the now-redundant PNPM_HOME PATH block. Idempotent:
+# detect either pre-migration (volta + pnpm), transitional (mise + pnpm),
+# or post-migration (mise only) state and skip if already correct.
 if grep -q 'export VOLTA_HOME=' "$HOME/.zshrc" 2>/dev/null; then
   # Pre-migration state: patch the volta block → mise activate.
   python3 - <<'PYEOF'
@@ -117,7 +121,19 @@ else:
     print('  ~/.zshrc: VOLTA_HOME found but block format unexpected; skipped (manual review needed)')
 PYEOF
 elif grep -qF "$MISE_ACTIVATE_MARKER" "$HOME/.zshrc" 2>/dev/null; then
-  echo "  ~/.zshrc already has mise activate (post-migration state)"
+  # Post-migration: drop the now-redundant PNPM_HOME PATH block if present
+  # (pnpm is mise-managed, exposed via mise activate → installs/pnpm/X/).
+  # Idempotent.
+  python3 - <<'PYEOF'
+import pathlib, re
+zshrc = pathlib.Path.home() / '.zshrc'
+text = zshrc.read_text()
+pnpm_pat = re.compile(r'# pnpm\n.*?\n# pnpm end\n', re.DOTALL)
+new_text, n = pnpm_pat.subn('', text, count=1)
+if n:
+    zshrc.write_text(new_text)
+    print('  ~/.zshrc: removed redundant PNPM_HOME PATH block (pnpm is now mise-managed)')
+PYEOF
 else
   echo "  ~/.zshrc: neither volta nor mise block found; skipped (manual review needed)"
 fi

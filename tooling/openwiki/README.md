@@ -7,10 +7,10 @@ agents that need durable, low-context-load repo reference docs.
 
 - **Source:** https://github.com/langchain-ai/openwiki
 - **npm package:** [`openwiki`](https://www.npmjs.com/package/openwiki)
-- **Version pinned on mercury:** `0.0.3` (npm registry; refreshed by `capture.sh` from `volta list`)
-- **Node pin:** `24.18.0` (the default volta runtime — same as every other global here)
-- **Install method:** volta global package (not apt, not npm-without-volta)
-- **Binary path:** `~/.volta/tools/image/packages/openwiki/bin/openwiki`
+- **Version pinned on mercury:** `0.0.3` (npm registry; refreshed by `capture.sh` from the mise-managed npm prefix)
+- **Node pin:** `24.x` (the global mise toolchain pin; resolves to the latest 24.x.x at install time — was 24.18.0 on 2026-07-18)
+- **Install method:** `npm install -g openwiki` against the mise-managed Node 24.x prefix (was a volta global package pre-2026-07-18; volta was retired)
+- **Binary path:** `/home/ubuntu/data/.local/share/mise/installs/node/24/bin/openwiki` (the mise-managed node bin dir)
 - **Config dir:** `~/.openwiki/` (created on first run; stores `.env` with provider credentials)
 
 ## What mercury uses this for
@@ -32,26 +32,30 @@ it current as the repo evolves (via the GitHub Action cron).
 ## Install (recovery)
 
 ```bash
-# Volta already manages globally installed packages via `volta install <pkg>[@version]`.
+# mise + npm provision the package against the Node 24.x install at
+# /home/ubuntu/data/.local/share/mise/installs/node/24/. mise manages
+# node itself but delegates npm globals to the npm registry directly.
 # This is the canonical, idempotent reinstall on a fresh mercury host:
-volta install openwiki
+PATH=/home/ubuntu/data/.local/share/mise/installs/node/24/bin:$PATH npm install -g openwiki
 ```
 
-The shim lands at `~/.volta/bin/openwiki` (which is already on PATH via
-`packages/node.yaml → path_order_required`). The package itself lives
-under `~/.volta/tools/image/packages/openwiki/` and the node_modules
-under `~/.volta/tools/image/packages/openwiki/lib/node_modules/openwiki/`.
+The binary lands at `/home/ubuntu/data/.local/share/mise/installs/node/24/bin/openwiki`
+(already on PATH via `packages/node.yaml → path_order_required` once
+`~/.zshrc` has been re-sourced post-migration). The package itself lives
+under `.../mise/installs/node/24/lib/node_modules/openwiki/`.
 
-`scripts/capture.sh` will refresh `packages/node.yaml →
-globally_pinned_packages` from `volta list all` on next run — the
-`openwiki@X.Y.Z` line will appear there automatically. No inventory
-edit needed for that.
+`scripts/capture.sh` does NOT currently refresh a globally-pinned-packages
+list (that was a volta-era construct removed in PR #67). The openwiki
+version is reflected in `inventory.yaml → openwiki.binary.installed_via`
+and verified by `scripts/audit.sh`'s `[openwiki]` section. No inventory
+edit needed for version bumps — `devtools-upgrade.ts` (cron) handles
+upgrades.
 
 ## Verify
 
 ```bash
-command -v openwiki        # → /home/ubuntu/.volta/bin/openwiki
-volta list all | grep openwiki   # → package openwiki@0.0.3 ...
+command -v openwiki        # → /home/ubuntu/data/.local/share/mise/installs/node/24/bin/openwiki
+npm ls -g --depth=0 | grep openwiki   # → openwiki@0.0.3 ...
 bash -c 'audit.sh [openwiki]' 2>&1 || true   # see audit section below
 ```
 
@@ -118,27 +122,29 @@ verify the key actually works, run `cd ~/data/code/<repo> && openwiki
 
 **Recoverable.** Nothing here is irreplaceable:
 
-- The npm package is reinstalled via `volta install openwiki`.
+- The npm package is reinstalled via `npm install -g openwiki` (with the mise-managed node bin on PATH).
 - The config file `~/.openwiki/.env` regenerates on next `openwiki --init`
   (the API key is the only loss — and the key lives in
   `secrets/inventory.yaml → openwiki-api-key` as a pointer).
 - Per-repo `openwiki/` trees regenerate on next `openwiki --init` against
   the repo; the bot's `AGENTS.md` patch is also regenerated.
 
-If mercury is wiped: `volta install openwiki`, restore the key, run
-`openwiki --init` against the repos you want documented. Done.
+If mercury is wiped: re-install mise + node, run `npm install -g openwiki`,
+restore the key, run `openwiki --init` against the repos you want
+documented. Done.
 
 ## Companion deps
 
-- **Node 24.18.0** — pinned via volta (default in this repo, already
-  installed via `packages/node.yaml → default_node`).
+- **Node 24.x** — pinned via mise (`node = "24"` floating in
+  `~/.config/mise/config.toml`; resolved to 24.18.0 on 2026-07-18).
 - **`@anthropic-ai/sdk`** + `better-sqlite3` — pulled in transitively by
-  `openwiki`. Both land under `~/.volta/tools/image/packages/openwiki/lib/node_modules/`.
+  `openwiki`. Both land under
+  `.../mise/installs/node/24/lib/node_modules/`.
 - No system-level deps; no apt packages.
 
 ## Companion config (in this repo)
 
 - `inventory.yaml → openwiki:` — provider pin, model pin, key-presence check.
 - `secrets/inventory.yaml → openwiki-api-key` — pointer to `~/.openwiki/.env`.
-- `packages/node.yaml → globally_pinned_packages` — auto-refreshed by capture.sh.
+- `packages/node.yaml` — Node 24.x pin (toolchain); openwiki is not pinned there (volta-era `globally_pinned_packages` block was removed in PR #67).
 - `scripts/audit.sh → [openwiki]` — drift section added in the install PR.

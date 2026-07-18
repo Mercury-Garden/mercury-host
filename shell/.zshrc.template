@@ -104,27 +104,23 @@ source $ZSH/oh-my-zsh.sh
 # alias ohmyzsh="mate ~/.oh-my-zsh"
 eval "$(starship init zsh)"
 
-export OPENFANG_HOME=/home/ubuntu/data/.mercury
-export PATH=/home/ubuntu/data/.mercury/bin:$PATH
 # Toolchain — mise (formerly Volta, unmaintained 2025).
 # Lives on /home/ubuntu/data via ~/.local/share symlink — DO NOT replace
 # this with raw ~/.local/share paths; `mise activate` reads the symlink
 # naturally. Verified 2026-07-18 during the volta→mise migration.
+# mise activate MUST run before any custom PATH prepends below so the
+# mise-managed tools (node + npm + pnpm + everything `npm install -g`)
+# win over per-tool PATH additions.
 if command -v mise >/dev/null 2>&1; then
   eval "$(mise activate zsh)"
 fi
 # End toolchain.
+
+export OPENFANG_HOME=/home/ubuntu/data/.mercury
+
 # GITHUB_TOKEN must be set per-host from ~/.hermes/.env or 1password.
 # DO NOT commit a real token here. See ../secrets/inventory.yaml for the rotation procedure.
 export GITHUB_TOKEN="${GITHUB_TOKEN:-}"
-
-# pnpm
-export PNPM_HOME="/home/ubuntu/.local/share/pnpm"
-case ":$PATH:" in
-  *":$PNPM_HOME/bin:"*) ;;
-  *) export PATH="$PNPM_HOME/bin:$PATH" ;;
-esac
-# pnpm end
 
 # Plannotator remote mode
 export PLANNOTATOR_REMOTE=1
