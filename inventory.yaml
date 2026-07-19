@@ -34,9 +34,9 @@ services:
       discord_app_id: "1491578957823344782"
       purpose: |
         Owns Node.js OSS reporting (nodejs/node + edsadr/node) and personal
-        health advisor. Default profile continues to own better-bet,
-        mercury-tasks, webhook-server, x-digest, mercury-host, and other
-        own repos.
+        health advisor. Default profile owns mercury-tasks, webhook-server,
+        x-digest, mercury-host, and other Mercury-Garden repositories.
+        better-bet was decommissioned from this host on 2026-07-19.
       scopes_needed: "bot + Send Messages + Read Message History + Embed Links"
       profile_dir: "~/.hermes/profiles/mercury-butler (not tracked; lives under HERMES_HOME)"
 
@@ -166,9 +166,6 @@ cron:
       - id: 59b7302d21b7
         name: x-digest-daily
         schedule: "0 14 * * 1-5"
-      - id: b5586aeda0f3
-        name: better-bet-knockout-daily-update
-        schedule: "30 12 * * *"
       - id: 45125c66ddd4
         name: devtools-upgrade
         schedule: "0 11 * * *"
@@ -566,15 +563,6 @@ projects:
     owns_subdomain: tasks.mercury.garden
     toolchain_pinned: true
 
-  - path: ~/data/code/better-bet
-    repo: Mercury-Garden/better-bet
-    package_manager: pnpm@11.14.0
-    pinned_node: "24"                 # floating; matches mise.toml in repo
-    expected_branch: main             # fixed 2026-07-18 (was: fix/pollapp-api-contract-drift, branch gone from origin)
-    lockfile_sha256: 94c13fb9894a    # capture.sh: refreshed better-bet
-    owns_subdomain: null
-    toolchain_pinned: true
-
   - path: ~/data/code/scriptcaster
     repo: Mercury-Garden/scriptcaster
     package_manager: pnpm@11.14.0
@@ -601,6 +589,19 @@ projects:
     lockfile_sha256: 3e4e9798a86a    # capture.sh: refreshed x-digest
     owns_subdomain: null
     toolchain_pinned: true
+
+# Repositories intentionally retired from this host. Keep the disposition
+# explicit so capture.sh ignores an on-disk cold copy rather than refreshing
+# it as an active workload.
+decommissioned_projects:
+  - path: ~/data/code/better-bet
+    repo: Mercury-Garden/better-bet
+    decommissioned_at: "2026-07-19"
+    disposition: |
+      Daily Hermes cron b5586aeda0f3 was permanently removed. No systemd
+      unit, nginx vhost, GitHub webhook, or active GitHub issue/PR existed.
+      The local repository is retained as a cold copy because it has
+      uncommitted tournament artifacts; it is not an active host workload.
 
 # ── OpenWiki (LangChain repo-documentation agent) ───────────────────────
 # OpenWiki is a CLI that generates and maintains a Markdown wiki for a

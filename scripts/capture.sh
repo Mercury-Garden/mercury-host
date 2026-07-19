@@ -79,14 +79,20 @@ note "wrote packages/apt.list ($(wc -l < packages/apt.list) entries, $(grep -cE 
 echo
 echo "[projects]"
 python3 - <<'PYEOF'
-import hashlib, json, pathlib, re
+import hashlib, json, pathlib, re, yaml
 
 inv_path = pathlib.Path('inventory.yaml')
 text = inv_path.read_text()
 home = pathlib.Path.home()
+active_project_paths = {
+    str(project.get('path', ''))
+    for project in (yaml.safe_load(text).get('projects', []) or [])
+}
 
-# Find every project block: starts at "  - path: <path>" and ends at the next
-# "  - path:" or end of the projects: section. Anchored by the projects: line.
+# Find every ACTIVE project block: starts at "  - path: <path>" under the
+# projects: section and ends before the next top-level section. A separate
+# decommissioned_projects: block is intentionally ignored so cold-copy repos
+# are never refreshed back into the active inventory.
 def update_block(block, lockfile_sha, toolchain_pinned, proj_name):
     """Update lockfile_sha256 and toolchain_pinned within a single project block."""
     new = re.sub(
@@ -110,6 +116,8 @@ proj_pattern = re.compile(
 def replace_proj(m):
     proj_path = m.group(1)
     block = m.group(0)  # full match including "- path:" header + indented body
+    if proj_path not in active_project_paths:
+        return block
     full = pathlib.Path(proj_path.replace('~', str(home)))
     proj_name = full.name
     if not (full / 'package.json').exists():

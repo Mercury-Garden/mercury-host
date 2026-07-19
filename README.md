@@ -75,7 +75,7 @@ bash scripts/backup-secrets.sh
 # Restore host secrets from a backup file
 bash scripts/restore-secrets.sh --dry-run             # preview
 bash scripts/restore-secrets.sh /path/to/secrets.yaml # apply
-bash scripts/restore-secrets.sh --env better-bet/.env # restore ONE .env under ~/data/code/
+bash scripts/restore-secrets.sh --env x-digest/.env   # restore ONE .env under ~/data/code/
 bash scripts/restore-secrets.sh --include code-env    # restore ALL auto-discovered .env* files
 
 # Snapshot full host state (irreplaceable configs) to a daily tarball
