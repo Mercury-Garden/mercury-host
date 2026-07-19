@@ -64,5 +64,8 @@ ubuntu-standard
 unified-monitoring-agent
 unzip
 util-linux
+# ── OpenViking egress monitoring (added 2026-07-19) ──────────────────────
+# Required by the egress-snapshot cron (scripts/../egress-snapshot.sh).
+vnstat
 yamllint
 zsh

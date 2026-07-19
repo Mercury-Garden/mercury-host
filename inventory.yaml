@@ -40,6 +40,23 @@ services:
       scopes_needed: "bot + Send Messages + Read Message History + Embed Links"
       profile_dir: "~/.hermes/profiles/mercury-butler (not tracked; lives under HERMES_HOME)"
 
+  # ── OpenViking context database (added 2026-07-19) ───────────────────────
+  - id: openviking-server
+    kind: systemd-user
+    unit: systemd/user/openviking-server.service
+    binds:
+      - 127.0.0.1:1933
+    nginx_vhost: memory.mercury.garden
+    description: "OpenViking context database — filesystem-style agent memory, vector retrieval, peer-scoped namespaces per Hermes profile"
+    repo: "pip-installed openviking 0.4.10 in the Hermes venv"
+    managed_by: mercutio
+    note: |
+      Auth model: dev/local-trusted mode (auth_mode reported as 'dev' in
+      /health). No server-side API key; trust boundary is the host's
+      loopback bind + nginx oauth2-proxy gating memory.mercury.garden.
+      Peer-scoped namespaces per Hermes profile (OPENVIKING_AGENT env var).
+      Config: ~/.openviking/ov.conf (mode 0600). Workspace: ~/data/openviking_ws/.
+
   - id: hermes-dashboard
     kind: systemd-system
     unit: systemd/system/hermes-dashboard.service
@@ -113,6 +130,7 @@ services:
       - dev.mercury.garden
       - plans.mercury.garden
       - webhook.mercury.garden
+      - memory.mercury.garden
     # NOTE: hermes.mercury.garden exists in sites-available but is NOT symlinked
     # into sites-enabled (file present at 644, no symlink). Remove from inventory
     # when fully decommissioned or re-enable by symlinking.
@@ -161,6 +179,17 @@ cron:
         # health, posts Discord alert to home channel on failure. See
         # webhook-server#22 for the script.
         schedule: "*/5 * * * *"
+      - id: 9b020f5e1d0a
+        name: memory-health-check
+        # Watchdog for the OpenViking server on :1933 (memory.mercury.garden).
+        # Mirrors gateway-health-check: silent on /health returning {"status":"ok",
+        # "healthy":true}, Discord alert on any other response.
+        schedule: "*/5 * * * *"
+      - id: 1a323b59719e
+        name: egress-snapshot
+        # Daily egress capture via vnstat, alerts on >10 GB outbound.
+        # Captures vnstat -d output to ~/data/backups/egress-YYYY-MM-DD.log.
+        schedule: "0 23 * * *"
       - id: 48b028f7098a
         name: secrets-test-smoke
         # Weekly smoke of the backup/restore round-trip harness.
