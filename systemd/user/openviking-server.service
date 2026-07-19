@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenViking context database server (local)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=OPENVIKING_CONFIG_FILE=%h/.openviking/ov.conf
+EnvironmentFile=%h/.openviking/.minimax-key
+ExecStart=/home/ubuntu/.hermes/hermes-agent/venv/bin/openviking-server
+WorkingDirectory=/home/ubuntu
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

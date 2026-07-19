@@ -30,7 +30,8 @@
 #   openchamber  ~/.config/openchamber/startup.env
 #   opencode    ~/.local/share/opencode/auth.json
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
-#   openwiki    ~/.openwiki/.env                                (MinMax coding-plan key for openwiki)
+#   openwiki    ~/.openwiki/.env                                (MiniMax coding-plan key for openwiki)
+#   openviking  ~/.openviking/.minimax-key + ~/.openviking/ov.conf (MiniMax key for OpenViking embed + VLM)
 #
 # Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
 # but restore logic lingered. If a future fork needs the configs, the
@@ -455,7 +456,11 @@ PYEOF
     echo "              ~/.config/gogcli/keyring/          (3 encrypted blobs, tar.gz)"
   fi
   if in_include openwiki; then
-    echo "  openwiki:   ~/.openwiki/.env  (mode 0600, MinMax coding-plan API key)"
+    echo "  openwiki:   ~/.openwiki/.env  (mode 0600, MiniMax coding-plan API key)"
+  fi
+  if in_include openviking; then
+    echo "  openviking: ~/.openviking/.minimax-key + ~/.openviking/ov.conf  (mode 0600 each)"
+    echo "              contains the MiniMax API key used by OpenViking for embedding + VLM"
   fi
   echo
   exit 0
@@ -784,7 +789,7 @@ if in_include gogcli; then
   fi
 fi
 
-# ── openwiki (~/.openwiki/.env — MinMax coding-plan key) ────────────────
+# ── openwiki (~/.openwiki/.env — MiniMax coding-plan key) ────────────────
 # Mirrors the opencode/gogcli standalone-config pattern. After restore, the
 # next `cd <repo> && openwiki` invocation reads the key from ~/.openwiki/.env
 # without needing `openwiki --init` again.
@@ -799,6 +804,28 @@ if in_include openwiki; then
   fi
 fi
 
+# ── openviking (~/.openviking/.minimax-key + ~/.openviking/ov.conf) ─────
+# Restores both the standalone key file (used by systemd EnvironmentFile=)
+# AND ov.conf (which contains the same key inline because OpenViking's
+# config schema does not support env-var substitution in api_key fields).
+# After restore, systemctl --user restart openviking-server picks them up.
+if in_include openviking; then
+  note "restoring openviking config..."
+  OV_DIR="${HOME}/.openviking"
+  mkdir -p "$OV_DIR"
+  chmod 700 "$OV_DIR"
+  if decode_b64_block "openviking_minimax_api_key" "$OV_DIR/.minimax-key" 0600; then
+    ok "openviking_minimax_api_key"
+  else
+    warn "openviking_minimax_api_key: SKIPPED (null in source)"
+  fi
+  if decode_b64_block "openviking_ov_conf" "$OV_DIR/ov.conf" 0600; then
+    ok "openviking_ov_conf"
+  else
+    warn "openviking_ov_conf: SKIPPED (null in source)"
+  fi
+fi
+
 # discord-notify + webhook-server restore blocks removed 2026-07-05 (PR #28)
 # — services were decommissioned in PR #24; see header comment.
 
@@ -810,3 +837,4 @@ note "  sudo systemctl restart nginx"
 note "  systemctl --user restart hermes-gateway mercury-tasks oauth2-proxy openchamber"
 note "  systemctl --user restart scriptcaster x-digest  # if --include code-env restored those"
 note "  systemctl --user restart hermes-cron  # if you have cron-driven tasks"
+note "  systemctl --user restart openviking-server  # if --include openviking restored that"

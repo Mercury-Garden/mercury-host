@@ -23,6 +23,7 @@
 #   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
 #   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
 #   openwiki                      ~/.openwiki/.env                       (added 2026-07-08)
+#   openviking                    ~/.openviking/.minimax-key + ov.conf   (added 2026-07-19)
 #
 # Auto-discovered (added 2026-07-07):
 #   code_env_<sanitized-path>     EVERY `.env*` file under ~/data/code/, except
@@ -258,6 +259,13 @@ GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
 # NOT backed up — it rebuilds on the next openwiki run and is ~130MB.
 OPENWIKI_ENV="${HOME}/.openwiki/.env"
 
+# OpenViking (agent context database, added 2026-07-19). The MiniMax API key
+# is referenced as both a standalone key file (EnvironmentFile= source for
+# the systemd unit) AND inline in ov.conf (which OpenViking's config schema
+# requires — see secrets/inventory.yaml). Back up both for full restore.
+OPENVKING_MINIMAX_KEY="${HOME}/.openviking/.minimax-key"
+OPENVKING_OV_CONF="${HOME}/.openviking/ov.conf"
+
 # Build the YAML
 {
   echo "---"
@@ -424,10 +432,17 @@ OPENWIKI_ENV="${HOME}/.openwiki/.env"
   pack_dir_b64_block "gogcli_keyring_tar_gz" "$GOGCLI_KEYRING_DIR" || miss "$HOME/.config/gogcli/keyring"
   echo
   echo "# ── openwiki (langchain repo-documentation agent) ──────────────"
-  # MinMax coding-plan key + provider/base_url/model pins. Written by
+  # MiniMax coding-plan key + provider/base_url/model pins. Written by
   # `openwiki --init`. Restoring with --include openwiki makes the next
   # `cd <repo> && openwiki --update` run without re-init.
   emit_b64_block "openwiki_env" "$OPENWIKI_ENV" || miss "$HOME/.openwiki/.env"
+  echo
+  # ── openviking (agent context database — added 2026-07-19) ────────
+  # Captures both the standalone key file and ov.conf (which contains the
+  # same key inline because OpenViking's config schema does not support
+  # env-var substitution in api_key fields). Both files are mode 0600.
+  emit_b64_block "openviking_minimax_api_key" "$OPENVKING_MINIMAX_KEY" || miss "$HOME/.openviking/.minimax-key"
+  emit_b64_block "openviking_ov_conf" "$OPENVKING_OV_CONF" || miss "$HOME/.openviking/ov.conf"
   echo
   # discord-notify + webhook-server removed 2026-07-05 (PR #28). The systemd
   # units and projects were decommissioned in PR #24 but their config dirs

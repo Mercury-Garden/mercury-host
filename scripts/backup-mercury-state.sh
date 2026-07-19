@@ -114,6 +114,14 @@ BACKUP_PATHS=(
     # Capturing it here too means a daily tarball alone is sufficient to
     # restore openwiki state without needing the secrets round-trip.
     /home/ubuntu/.openwiki/.env
+    # ── OpenViking (added 2026-07-19) ────────────────────────────────────────
+    # ~/.openviking/ holds ov.conf (mode 0600, contains MiniMax API key
+    # inline — see secrets/inventory.yaml) and ovcli.conf (loopback URL).
+    # Workspace is captured separately below. The MiniMax key is also
+    # captured by backup-secrets.sh as openviking_minimax_api_key and
+    # openviking_ov_conf b64 blocks (see secrets/inventory.yaml).
+    /home/ubuntu/.openviking
+    /home/ubuntu/data/openviking_ws
 )
 
 # /etc/nginx + /etc/letsencrypt contain root-only files. The nginx tree has
