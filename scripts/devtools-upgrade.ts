@@ -103,14 +103,26 @@ try {
   // `mise -q current node` prints just "24.18.0\n" (no tool prefix);
   // `mise -q current` prints "node 24.18.0\n" (with prefix). We use the
   // prefixed form so the parsing pattern is robust.
-  const nodeVer = execSync(`"${MISE_DATA_DIR}/../bin/mise" -q current`, { encoding: 'utf8' })
+  // The mise CLI itself lives at $HOME/.local/bin/mise (canonical) or at
+  // <data-volume-prefix>/.local/bin/mise when HOME is on a different volume.
+  // We try the HOME-relative path first (works on the data-volume mount),
+  // then the data-volume-prefixed path (works on the boot-volume fallback).
+  const miseBinCandidates = [
+    join(HOME, '.local/bin/mise'),
+    '/home/ubuntu/data/.local/bin/mise',
+  ]
+  const miseBin = miseBinCandidates.find((p) => existsSync(p)) ?? 'mise'
+  const nodeVer = execSync(`"${miseBin}" -q current`, { encoding: 'utf8' })
     .split('\n').find((l) => l.startsWith('node'))?.split(/\s+/)[1] ?? ''
   MISE_NODE_BIN = join(MISE_DATA_DIR, 'installs', `node`, nodeVer, 'bin')
 } catch {
   // best-effort; fall through to symlinked path
 }
 if (!MISE_NODE_BIN || !existsSync(MISE_NODE_BIN)) {
-  MISE_NODE_BIN = join(HOME, '.local/share/mise/installs/node/24.18.0/bin')
+  MISE_NODE_BIN = join(MISE_DATA_DIR, 'installs/node/24.18.0/bin')
+  if (!existsSync(MISE_NODE_BIN)) {
+    MISE_NODE_BIN = join(HOME, '.local/share/mise/installs/node/24.18.0/bin')
+  }
 }
 
 // Pnpm_HOME_DIR may be set explicitly. Default to ~/.local/share/pnpm

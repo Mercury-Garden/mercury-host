@@ -84,8 +84,10 @@ log "  ok: three-case classification block is present"
 
 # ── 2. behavioral check: script runs and emits 14 lines ──────────────────
 log "step 2: behavioral check — script runs and emits 14 JSON lines"
-
-OUT=$(node --experimental-strip-types "$SCRIPT" 2>&1)
+# Note: capture stdout only. The script may emit non-JSON warnings to stderr
+# (e.g. fallback-path resolution when the canonical mise binary path is
+# unreachable); we don't want those corrupting the line count.
+OUT=$(node --experimental-strip-types "$SCRIPT" 2>/dev/null)
 RC=$?
 if [ "$RC" -ne 0 ]; then
   echo "FAIL: script exited non-zero (rc=$RC)" >&2
@@ -101,11 +103,13 @@ if [ "$LINE_COUNT" -ne 14 ]; then
 fi
 log "  ok: 14 lines emitted"
 
-# Verify canonical order (matches the cron prompt's hard-rule)
+# Verify canonical order (matches the cron prompt's hard-rule).
+# Post-2026-07-18 (volta→mise migration): volta is dropped, mise is
+# added (self-update of the mise binary). All other tools unchanged.
 ORDER=$(echo "$OUT" | python3 -c '
 import json, sys
 got = [json.loads(l)["tool"] for l in sys.stdin if l.strip()]
-expected = ["opencode-ai","openchamber","pnpm","node","volta","context-mode","@plannotator/opencode","@colbymchenry/codegraph","opencode-plugin-openspec","@fission-ai/openspec","openwiki","rtk","plannotator","codegraph"]
+expected = ["opencode-ai","openchamber","pnpm","node","mise","context-mode","@plannotator/opencode","@colbymchenry/codegraph","opencode-plugin-openspec","@fission-ai/openspec","openwiki","rtk","plannotator","codegraph"]
 print("OK" if got == expected else f"ORDER MISMATCH: got {got}")
 ')
 if [ "$ORDER" != "OK" ]; then

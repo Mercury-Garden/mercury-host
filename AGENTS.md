@@ -181,8 +181,13 @@ catches most issues before push.
   interprets as "latest installed 24.x" (currently 24.18.0). The audit
   uses semver-aware comparison: `expected` may be a prefix of `actual`.
   PATH order per `path_order_required` is
-  `~/.local/share/pnpm/bin` first, then
-  `~/.local/share/mise/installs/node/24/bin`, then `~/.hermes/...`. The
+  `~/.local/share/mise/installs/pnpm/11.14.0` first (from
+  `~/.zshrc → eval "$(mise activate zsh)"`), then
+  `~/.local/share/mise/installs/node/24/bin`, then
+  `~/.local/bin`, then `~/.cargo/bin` (from `~/.zshenv → .cargo/env`,
+  which runs before `.zshrc` so cargo is added to the parent PATH that
+  mise prepends ON TOP OF). In a fresh SSH/login shell where mise isn't
+  yet on PATH, cargo is first and mise prepends above it. The
   `~/.hermes/node` runtime is hermes-internal (not user-managed) and
   capture.sh refreshes both.
 - **The global mise config lives at `~/.config/mise/config.toml`** and
