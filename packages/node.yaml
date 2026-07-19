@@ -46,17 +46,22 @@ system_node:
   note: "No system node. All node access goes through mise (general) or hermes/node (gateway)."
 
 path_order_required:
-  # Post-volta→mise migration (2026-07-18), extended for mise-managed pnpm
-  # (2026-07-18, this PR). Verified by the audit `capture.sh` PATH-walk
-  # validator. Order rationale (what `eval "$(mise activate zsh)"` actually
-  # prepends to PATH, given mise on PATH at startup):
-  # - ~/.local/share/mise/installs/pnpm/11.14.0     (mise-managed pnpm bin)
-  #                                                 — mise activate prepends
-  #                                                 pnpm BEFORE node because
-  #                                                 pnpm is configured globally;
-  #                                                 node comes second.
+  # Post-volta→mise migration (2026-07-18). Verified by the audit `capture.sh`
+  # PATH-walk validator on 2026-07-19 (PR #74). Order rationale (what
+  # `eval "$(mise activate zsh)"` actually prepends to PATH, given mise on
+  # PATH at startup):
   # - ~/.local/share/mise/installs/node/24/bin      (mise node 24.18.0 bin)
-  # - ~/.local/bin                                  (mise binary itself)
+  #                                                 — mise activate prepends
+  #                                                 node BEFORE pnpm because
+  #                                                 mise config globally sets
+  #                                                 `node = "24"` which goes
+  #                                                 into mise's shim dir first.
+  #                                                 (Earlier comment said the
+  #                                                 reverse; verified wrong by
+  #                                                 `zsh -i -c 'echo $PATH'`.)
+  # - ~/.local/share/mise/installs/pnpm/11.14.0     (mise-managed pnpm bin)
+  # - ~/.local/bin                                  (mise binary itself +
+  #                                                 opencode, openspec, etc.)
   # - ~/.cargo/bin                                  (rust; inherited from
   #                                                 ~/.zshenv sourcing
   #                                                 ~/.cargo/env, which prepends
@@ -70,9 +75,12 @@ path_order_required:
   # Note: the gateway systemd units deliberately put hermes/node/bin BEFORE
   #       the mise install dirs (PR #70) so the hermes-bundled node wins for
   #       gateway processes — but for interactive shells the mise install
-  #       dirs win for any non-rust tool.
-  - ~/.local/share/mise/installs/pnpm/11.14.0
+  #       dirs win for any non-rust tool. Also note: hermes-agent's venv/bin
+  #       ends up between pnpm/11.14.0 and ~/.local/bin in practice (the
+  #       user's shell prepends hermes-agent paths during activation), but
+  #       this is hermes-internal and not part of the toolchain contract.
   - ~/.local/share/mise/installs/node/24/bin
+  - ~/.local/share/mise/installs/pnpm/11.14.0
   - ~/.local/bin
   - ~/.cargo/bin
   - /usr/local/sbin
