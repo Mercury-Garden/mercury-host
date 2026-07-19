@@ -11,7 +11,7 @@
 #   - package caches (.cache, ~/.local/share/uv, ~/.cargo/registry,
 #     ~/.rustup/toolchains, ~/.npm, ~/.bun, ~/.local/share/mise,
 #     ~/.volta (legacy — being phased out; superseded by mise on
-#     2026-07-18 — see TODO at the active .volta exclude below))
+#     2026-07-18 — kept as defensive exclude in EXCLUDES below)
 #   - secrets.yaml (separate restore path: scripts/restore-secrets.sh)
 #   - Let's Encrypt account private keys (see ELEVATED_EXCLUDES below)
 #
@@ -170,10 +170,11 @@ EXCLUDES=(
     --exclude='.local/share/pnpm/store'
     --exclude='.local/share/Trash'
     --exclude='.local/share/mise'   # rebuild by `mise install`; ~200MB; replaced .volta 2026-07-18
-    --exclude='.volta'              # legacy until Phase 5 teardown; rebuild by `volta install` if needed
-    # TODO(post-Phase-5): once ~/.volta is removed (Phase 5, 2026-07-18),
-    # delete the line above; tar will skip a non-existent path naturally,
-    # so the exclude is just defensive against accidental restoration.
+    --exclude='.volta'              # legacy — kept as defensive exclude even after Phase 5 teardown.
+                                    # tar will skip a non-existent path naturally, so this line is
+                                    # safe to keep indefinitely (idempotent no-op if ~/.volta is gone).
+                                    # Keeping it documents the historical exclusion so future
+                                    # maintainers understand why the legacy toolchain isn't in backups.
     --exclude='.secrets/secrets.yaml'
     # ── User cache relocation (2026-07-05) ──────────────────────────────
     # ~/.cache and ~/.local/share are now symlinks pointing at
