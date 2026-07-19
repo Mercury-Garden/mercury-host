@@ -61,7 +61,7 @@ All paths are relative to repo root unless noted.
 | Preview a secrets restore | `bash scripts/restore-secrets.sh --dry-run` |
 | Restore secrets from a specific file (no service restarts) | `bash scripts/restore-secrets.sh /path/to/secrets.yaml` |
 | Restore only one subsystem | `bash scripts/restore-secrets.sh --include oauth2` |
-| Restore one specific `.env` under `~/data/code/` (per-file granularity) | `bash scripts/restore-secrets.sh --env better-bet/.env` |
+| Restore one specific `.env` under `~/data/code/` (per-file granularity) | `bash scripts/restore-secrets.sh --env x-digest/.env` |
 | Restore all auto-discovered `.env*` files under `~/data/code/` | `bash scripts/restore-secrets.sh --include code-env` |
 | Restore only the openwiki config (`~/.openwiki/.env`) | `bash scripts/restore-secrets.sh --include openwiki` |
 | Run the secrets backup/restore round-trip test (synthetic $HOME, 34 assertions) | `bash scripts/test-secrets-backup-restore.sh` |

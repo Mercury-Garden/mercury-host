@@ -20,6 +20,7 @@ Cases:
   2. new entry in jobs.json (not in inventory) is appended
   3. no drift = no-op (byte-for-byte)
   4. empty list -> populated (the original PR #64 case)
+  5. project-shaped blocks under decommissioned_projects are ignored
 
 Run from repo root:
     python3 scripts/test-capture-hermes-jobs-populated.py --verbose
@@ -38,32 +39,28 @@ import tempfile
 CAPTURE_SH = "scripts/capture.sh"
 
 
-def run_capture_on_inventory(inventory_text, hermes_jobs):
-    """Run capture.sh end-to-end against the live repo, but with two
-    sandboxed side-effects:
-      - $HOME redirected so capture.sh reads $HOME/.hermes/cron/jobs.json
-        from a temp file we control (instead of the real one)
-      - inventory.yaml: the test writes a fixture copy to a tempdir and
-        the real one in the repo is preserved; we read capture.sh's
-        stdout for what it printed (capture.sh echoes the inventory diff
-        via the `[inventory]` section's `git diff` invocation).
-    But capture.sh modifies inventory.yaml in-place — so we instead:
-      - copy the fixture to the REAL inventory.yaml path
-      - run capture.sh
-      - read the post-capture inventory.yaml
-      - restore the original inventory.yaml from a backup taken before
+def run_capture_on_inventory(inventory_text, hermes_jobs, project_names=()):
+    """Run capture.sh end-to-end while preserving every touched repo file.
 
-    Tradeoff: this touches the real repo's inventory.yaml briefly. It's
-    restored after the test, but a concurrent git operation could race.
-    Acceptable because the test is single-threaded and the script is fast.
+    Sandbox HOME supplies a controlled jobs.json plus optional synthetic
+    projects. capture.sh itself still runs from the real repo root, so this
+    helper snapshots and restores inventory.yaml plus the generated package
+    inventories around every case. That exercises the actual script without
+    leaving test drift in the worktree.
     """
     import pathlib
     repo_root = pathlib.Path(__file__).resolve().parent.parent
     inv_path = repo_root / "inventory.yaml"
     backup_path = repo_root / ".test-inventory-backup.yaml"
+    generated_paths = (repo_root / "packages" / "apt.list",
+                       repo_root / "packages" / "node.yaml")
+    generated_backups = {}
 
-    # Back up the real inventory, write the fixture.
+    # capture.sh refreshes these files as collateral. Preserve them too so
+    # the regression test is side-effect-free for the surrounding worktree.
     shutil.copy(inv_path, backup_path)
+    for path in generated_paths:
+        generated_backups[path] = path.read_bytes()
     try:
         with open(inv_path, "w") as f:
             f.write(inventory_text)
@@ -72,6 +69,18 @@ def run_capture_on_inventory(inventory_text, hermes_jobs):
             os.makedirs(f"{tmp_home}/.hermes/cron", exist_ok=True)
             with open(f"{tmp_home}/.hermes/cron/jobs.json", "w") as f:
                 json.dump({"jobs": hermes_jobs}, f)
+            # Optional synthetic projects make the project-refresh path real
+            # rather than vacuously green. Each has the files capture.sh needs
+            # to compute a lockfile hash + toolchain pin.
+            for project_name in project_names:
+                project = f"{tmp_home}/data/code/{project_name}"
+                os.makedirs(project, exist_ok=True)
+                with open(f"{project}/package.json", "w") as f:
+                    json.dump({"name": project_name}, f)
+                with open(f"{project}/pnpm-lock.yaml", "w") as f:
+                    f.write("lockfileVersion: '9.0'\n")
+                with open(f"{project}/mise.toml", "w") as f:
+                    f.write('[tools]\nnode = "24"\n')
             env = dict(os.environ)
             env["HOME"] = tmp_home
             proc = subprocess.run(
@@ -88,8 +97,10 @@ def run_capture_on_inventory(inventory_text, hermes_jobs):
             with open(inv_path) as f:
                 return f.read()
     finally:
-        # Always restore the original inventory.yaml.
+        # Always restore the original inventory + generated package files.
         shutil.move(backup_path, inv_path)
+        for path, content in generated_backups.items():
+            path.write_bytes(content)
 
 
 # ── Test fixtures ────────────────────────────────────────────────────────
@@ -202,6 +213,43 @@ LIVE_JOBS_FOR_EMPTY = [
 ]
 
 
+# (5) Active + decommissioned project blocks share the same `- path:` shape.
+# Expected: capture updates only the active project; the cold-copy metadata
+# remains byte-for-byte unchanged even when its package files exist.
+DECOMMISSIONED_PROJECT_FIXTURE = """\
+projects:
+  - path: ~/data/code/active
+    repo: Mercury-Garden/active
+    lockfile_sha256: aaaaaaaaaaaa
+    toolchain_pinned: false
+
+decommissioned_projects:
+  - path: ~/data/code/retired
+    repo: Mercury-Garden/retired
+    lockfile_sha256: keep-this-value
+    toolchain_pinned: false
+    disposition: cold copy
+
+cron:
+  hermes:
+    jobs_file: ~/.hermes/cron/jobs.json
+    jobs: []
+"""
+
+
+def test_decommissioned_project_not_refreshed(verbose):
+    """capture.sh must ignore project-shaped blocks outside active projects."""
+    out = run_capture_on_inventory(
+        DECOMMISSIONED_PROJECT_FIXTURE, [], project_names=("retired",)
+    )
+    assert_contains(out, "lockfile_sha256: keep-this-value",
+                    "decommissioned project metadata must not be refreshed")
+    assert_contains(out, "disposition: cold copy",
+                    "decommissioned project disposition must survive")
+    if verbose:
+        print("  decommissioned project block preserved")
+
+
 # ── Assertions ───────────────────────────────────────────────────────────
 
 def assert_contains(haystack, needle, msg):
@@ -295,6 +343,7 @@ def main():
         ("new_job_appended_with_comments_intact", test_new_job_appended_with_comments_intact),
         ("no_drift_no_change", test_no_drift_no_change),
         ("empty_to_populated", test_empty_to_populated),
+        ("decommissioned_project_not_refreshed", test_decommissioned_project_not_refreshed),
     ]
     failed = 0
     for name, fn in tests:

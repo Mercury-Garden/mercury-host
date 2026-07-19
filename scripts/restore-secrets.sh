@@ -9,7 +9,7 @@
 #   bash scripts/restore-secrets.sh --include <kind>           # only restore specific kinds
 #   bash scripts/restore-secrets.sh --env <path-or-kind>       # restore ONE .env under ~/data/code/ and exit
 #                                                              # Accepts: bare repo-relative path (e.g.
-#                                                              #   better-bet/.env), absolute path
+#                                                              #   x-digest/.env), absolute path
 #                                                              #   (/home/ubuntu/data/code/x-digest/.env),
 #                                                              #   or sanitized kind (code_env_x-digest_env).
 #                                                              # Refuses to overwrite a non-empty target
@@ -129,8 +129,10 @@ sanitize_env_kind() {
 }
 
 # ── Resolve --env <arg> into "<yaml_key> <target_path>" on stdout.
+# `--env` accepts any existing project-relative path; the examples use
+# x-digest because it is an active host workload.
 # Accepts any of:
-#   1. Bare repo-relative path:        better-bet/.env
+#   1. Bare repo-relative path:        x-digest/.env
 #   2. Absolute path:                  /home/ubuntu/data/code/x-digest/.env
 #   3. Sanitized YAML kind:            code_env_x-digest_env
 # Returns 0 on success, 1 if --env arg can't be matched to a source YAML
@@ -355,7 +357,7 @@ if [ -n "$ENV_TARGET" ]; then
   echo
   if ! RESOLVED="$(resolve_env_target "$ENV_TARGET")"; then
     echo "ERROR: could not resolve --env '$ENV_TARGET' to a known code_env_* block" >&2
-    echo "       Pass a bare repo-relative path (better-bet/.env), an absolute" >&2
+    echo "       Pass a bare repo-relative path (x-digest/.env), an absolute" >&2
     echo "       path, or a sanitized kind (code_env_x-digest_env)." >&2
     exit 2
   fi
