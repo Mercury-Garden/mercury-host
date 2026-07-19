@@ -14,6 +14,7 @@ Environment="HERMES_HOME=/home/ubuntu/.hermes/profiles/mercury-butler"
 Restart=always
 RestartSec=5
 RestartForceExitStatus=75
+RestartPreventExitStatus=78
 KillMode=mixed
 KillSignal=SIGTERM
 ExecReload=/bin/kill -USR1 $MAINPID
