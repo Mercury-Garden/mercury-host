@@ -1030,8 +1030,9 @@ drift = 0
 import shutil
 
 def find_openwiki():
-    """Locate the openwiki binary on PATH (now a global npm install; was
-    bundled via volta prior to the 2026-07-18 migration)."""
+    """Locate the openwiki binary on PATH (a standalone npm CLI against
+    the mise-managed Node 24.x prefix; previously a volta global package
+    before the 2026-07-18 volta→mise migration)."""
     return shutil.which('openwiki')
 
 # 1. CLI on PATH
