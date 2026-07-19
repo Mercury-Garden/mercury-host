@@ -221,7 +221,7 @@ PYEOF
 # expect them to be in our tracked unit files.
 echo
 echo "[systemd-user]"
-for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber obscura-mcp session-migration; do
+for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber obscura-mcp session-migration openviking-server; do
   if systemctl --user is-enabled "$svc" >/dev/null 2>&1; then
     ok "$svc enabled (user)"
   else
@@ -253,9 +253,33 @@ done
 # said enabled, audit never noticed). See AGENTS.md post-mortem note.
 echo
 echo "[active-services]"
-for svc in nginx cron hermes-dashboard; do
-  if ! systemctl is-enabled "$svc" >/dev/null 2>&1; then
-    # Not enabled — skip; [systemd-system] will already have flagged that.
+# Tagged list: each entry is "<kind>:<name>". kind is "system" or "user"
+# and the loop dispatches systemctl variants accordingly. The previous
+# shape (a bare list of names) assumed every active service is a system
+# unit, which broke once openviking-server (a user unit) joined the 24/7
+# set in PR #78.
+declare -a ACTIVE_SERVICES=(
+  "system:nginx"
+  "system:cron"
+  "system:hermes-dashboard"
+  "user:openviking-server"
+)
+for entry in "${ACTIVE_SERVICES[@]}"; do
+  kind="${entry%%:*}"
+  svc="${entry#*:}"
+  if [ "$kind" = "user" ]; then
+    is_enabled_cmd="systemctl --user is-enabled"
+    is_active_cmd="systemctl --user is-active"
+    show_cmd="systemctl --user show"
+    scope_label="(user)"
+  else
+    is_enabled_cmd="systemctl is-enabled"
+    is_active_cmd="systemctl is-active"
+    show_cmd="systemctl show"
+    scope_label="(system)"
+  fi
+  if ! $is_enabled_cmd "$svc" >/dev/null 2>&1; then
+    # Not enabled — skip; [systemd-{system,user}] will already have flagged that.
     continue
   fi
   # Note: `is-active` exits 3 on inactive/dead/failed and 4 on unknown —
@@ -264,7 +288,7 @@ for svc in nginx cron hermes-dashboard; do
   # with `set -euo pipefail`), so swallow them here. The actual state
   # string is what we care about.
   active_state=""
-  if active_state=$(systemctl is-active "$svc" 2>/dev/null); then
+  if active_state=$($is_active_cmd "$svc" 2>/dev/null); then
     :
   else
     # is-active returned non-zero; `active_state` is whatever partial
@@ -275,16 +299,16 @@ for svc in nginx cron hermes-dashboard; do
   active_state="${active_state:-unknown}"
   case "${active_state}" in
     active)
-      ok "$svc active (system)"
+      ok "$svc active $scope_label"
       ;;
     failed)
-      drift "$svc in ActiveState=failed (system) — fix: sudo systemctl status $svc; sudo systemctl restart $svc"
+      drift "$svc in ActiveState=failed $scope_label — fix: systemctl $kind status $svc; systemctl $kind restart $svc"
       ;;
     inactive|dead|activating|reloading|deactivating)
       # Get how long it's been down to flag long-running silent outages
-      inactive_since=$(systemctl show "$svc" -p InactiveEnterTimestamp --value 2>/dev/null || true)
+      inactive_since=$($show_cmd "$svc" -p InactiveEnterTimestamp --value 2>/dev/null || true)
       inactive_since="${inactive_since:-unknown}"
-      drift "$svc NOT active (state=${active_state}, inactive-since=${inactive_since})"
+      drift "$svc NOT active (state=${active_state}, inactive-since=${inactive_since} $scope_label)"
       ;;
     *)
       note "$svc in unexpected state: ${active_state}"
@@ -320,7 +344,7 @@ fi
 # Use -e (any exists) instead of -L (only symlink).
 echo
 echo "[nginx]"
-for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden hermes.mercury.garden; do
+for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden hermes.mercury.garden memory.mercury.garden; do
   if [ -e "/etc/nginx/sites-enabled/$vhost" ]; then
     if [ -L "/etc/nginx/sites-enabled/$vhost" ]; then
       ok "$vhost enabled (symlink)"
