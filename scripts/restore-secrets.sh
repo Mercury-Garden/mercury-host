@@ -32,6 +32,10 @@
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
 #   openwiki    ~/.openwiki/.env                                (MiniMax coding-plan key for openwiki)
 #   openviking  ~/.openviking/.minimax-key + ~/.openviking/ov.conf (MiniMax key for OpenViking embed + VLM)
+#   varlock-pass  ~/.password-store/ (encrypted pass tree) + ~/.gnupg/private-keys-v1.d/ (GPG private key).
+#                Single include kind covers both — both dirs are needed for
+#                the encrypted store to be usable after a restore.
+#                Existing files are preserved (merge-restore, not clobber).
 #
 # Removed 2026-07-05 (PR #28) — services were decommissioned in PR #24
 # but restore logic lingered. If a future fork needs the configs, the
@@ -314,6 +318,87 @@ for root, _, files in os.walk(target_dir):
         p = os.path.join(root, f)
         os.chmod(p, 0o600)
 print(f"  ✓ extracted {target_dir} (from {len(decoded)}-byte b64 block)", file=sys.stderr)
+PYEOF
+}
+
+# Like extract_tar_gz_b64_block but PRESERVES existing target-dir contents.
+# Used for the Varlock pass store + GPG private key restore: the operator
+# may have a working store on the live host, and a re-restore from backup
+# should merge into it without destroying any entries that exist on disk
+# but not in the tar (e.g., newer entries added since the backup was made).
+# Existing files are NOT overwritten; the tar's copy wins only where the
+# file is missing locally.
+#
+# Usage: extract_tar_gz_b64_block_preserve "key" "/target/dir"   →  merges
+extract_tar_gz_b64_block_preserve() {
+  local key="$1" target_dir="$2"
+  python3 - "$SRC" "$key" "$target_dir" <<'PYEOF'
+import base64, errno, gzip, io, os, pathlib, sys, tarfile
+src, key, target_dir = sys.argv[1:4]
+text = pathlib.Path(src).read_text()
+lines = text.splitlines()
+out, in_block = [], False
+for line in lines:
+    if not in_block:
+        if line.startswith(key + ':') and (line[len(key)+1:].strip() in ('|', '|-', '>')):
+            in_block = True
+        continue
+    if not line:
+        out.append('')
+    elif line.startswith(' ') or line.startswith('\t'):
+        out.append(line)
+    else:
+        break
+non_blank = [l for l in out if l]
+if not non_blank:
+    print(f"  ! {key}: not found or null in {src}", file=sys.stderr)
+    sys.exit(1)
+min_indent = min(len(l) - len(l.lstrip()) for l in non_blank)
+stripped = ''.join(l[min_indent:] for l in out if l)
+try:
+    decoded = base64.b64decode(stripped, validate=True)
+except Exception as e:
+    print(f"  ! b64 decode failed for {key}: {e}", file=sys.stderr)
+    sys.exit(1)
+os.makedirs(target_dir, exist_ok=True)
+tar_bytes = gzip.decompress(decoded)
+tar = tarfile.open(fileobj=io.BytesIO(tar_bytes), mode='r')
+# Merge-untars: skip members whose target path already exists.
+extracted = 0
+skipped = 0
+for member in tar.getmembers():
+    # Strip the leading dir prefix from the tar (tar's first member is the
+    # captured directory name, e.g., "password-store/"; we want its
+    # contents directly under target_dir).
+    member_name = member.name
+    parts = member_name.split('/', 1)
+    if len(parts) == 2:
+        rel = parts[1]
+    else:
+        rel = ''
+    target_path = os.path.join(target_dir, rel) if rel else target_dir
+    if os.path.exists(target_path) and not os.path.isdir(target_path):
+        skipped += 1
+        continue
+    if os.path.exists(target_path) and os.path.isdir(target_path) and member.isdir():
+        skipped += 1
+        continue
+    if not rel:
+        # The captured-dir entry itself — already exists at target_dir.
+        skipped += 1
+        continue
+    # Use extract with a manual filter rather than extractall so we can
+    # honour the "skip if exists" semantics. Member path needs to be
+    # rewritten so it lands directly under target_dir.
+    member.name = rel
+    try:
+        tar.extract(member, path=target_dir)
+        extracted += 1
+    except (OSError, KeyError) as e:
+        # EEXIST means we raced with ourselves; safe to ignore.
+        if getattr(e, 'errno', None) != errno.EEXIST:
+            raise
+print(f"  ✓ merged {extracted} file(s) into {target_dir} ({skipped} pre-existing file(s) preserved)", file=sys.stderr)
 PYEOF
 }
 
@@ -825,6 +910,71 @@ if in_include openviking; then
     ok "openviking_ov_conf"
   else
     warn "openviking_ov_conf: SKIPPED (null in source)"
+  fi
+fi
+
+# ── Varlock pass store + GPG private key (added 2026-07-20, Stage 3) ─────
+# Three blocks cover the encrypted store + key recovery:
+#   * varlock_gpg_armored_private  — single-file armored private key export.
+#                                    Imported first (deterministic, durable,
+#                                    works regardless of agent state).
+#   * varlock_gpg_private_tar_gz   — tar.gz of ~/.gnupg/private-keys-v1.d/
+#                                    (opportunistic second layer; may be empty
+#                                    if .key files have not been materialized
+#                                    by a prior agent access).
+#   * varlock_pass_store_tar_gz    — tar.gz of ~/.password-store/ (encrypted
+#                                    entries + .gpg-id).
+# After restore, the operator verifies with:
+#   pass show <any-existing-key>     # works iff GPG key + store are both present
+#   gpg --list-secret-keys           # fingerprint should match inventory
+if in_include varlock-pass; then
+  note "restoring varlock pass store + GPG private key (merge-restore, preserves existing)..."
+  GPG_KEYS_DIR="${HOME}/.gnupg/private-keys-v1.d"
+  mkdir -p "$GPG_KEYS_DIR"
+  chmod 700 "$GPG_KEYS_DIR"
+  # Step 1: import the armored private key. This is the durable path —
+  # it always works regardless of whether the .key files were materialized.
+  # We pipe through a tempfile because `decode_b64_block` writes the
+  # decoded content to a target file, but gpg --import expects a path.
+  ARMORED_TMP=$(mktemp -t varlock-armored-XXXXXX.asc)
+  chmod 600 "$ARMORED_TMP"
+  if decode_b64_block "varlock_gpg_armored_private" "$ARMORED_TMP" 0600 2>/dev/null; then
+    # gpg --import is idempotent — re-importing the same key prints a
+    # "already in keyring" notice and exits 0. --batch suppresses any
+    # pinentry prompt; --yes avoids the "import anyway?" confirmation.
+    IMPORT_OUT=$(HOME="$HOME" GNUPGHOME="$HOME/.gnupg" gpg --batch --yes \
+        --pinentry-mode loopback --import "$ARMORED_TMP" 2>&1 || true)
+    if echo "$IMPORT_OUT" | grep -qE '(imported|unchanged|new signatures)'; then
+      ok "varlock_gpg_armored_private (imported)"
+    else
+      warn "varlock_gpg_armored_private: imported but unclear status — '$IMPORT_OUT'"
+    fi
+  else
+    note "varlock_gpg_armored_private: null in source (skipping armored import)"
+  fi
+  rm -f "$ARMORED_TMP"
+  # Step 2: merge the .key files tar (opportunistic). After the armored
+  # import, the .key files should already be on disk; the tar merge just
+  # adds anything the armored import missed.
+  if extract_tar_gz_b64_block_preserve "varlock_gpg_private_tar_gz" "$GPG_KEYS_DIR" 2>/dev/null; then
+    ok "varlock_gpg_private (merged into $GPG_KEYS_DIR)"
+  else
+    note "varlock_gpg_private_tar_gz: null in source (skipping — armored import was sufficient)"
+  fi
+  # Step 3: merge the pass store tar (merge semantics — never clobbers).
+  PASS_DIR="${HOME}/.password-store"
+  mkdir -p "$PASS_DIR"
+  chmod 700 "$PASS_DIR"
+  if extract_tar_gz_b64_block_preserve "varlock_pass_store_tar_gz" "$PASS_DIR" 2>/dev/null; then
+    ok "varlock_pass_store (merged into $PASS_DIR)"
+  else
+    warn "varlock_pass_store: SKIPPED (null in source or extraction failed)"
+  fi
+  # Defensive: enforce .gpg-id mode (the merge-restore preserves it from
+  # the tar, but if the dir was empty before restore, mode 600 is critical
+  # for pass init to accept the file).
+  if [ -f "$PASS_DIR/.gpg-id" ]; then
+    chmod 600 "$PASS_DIR/.gpg-id"
   fi
 fi
 

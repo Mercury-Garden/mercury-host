@@ -74,6 +74,12 @@ BACKUP_PATHS=(
     /home/ubuntu/.config
     /home/ubuntu/.ssh
     /home/ubuntu/.gnupg
+    # Varlock pass store (added 2026-07-20, Stage 3). Captured here as a
+    # second-layer defense: the encrypted store is also in backup-secrets.sh
+    # (under varlock_pass_store_tar_gz) — daily state tarball captures it
+    # too so a fresh-restore-only-from-state-tarball flow (no secrets.yaml)
+    # still produces a working pass store + GPG key.
+    /home/ubuntu/.password-store
     /home/ubuntu/.local/share/opencode
     /home/ubuntu/.oh-my-zsh/custom
     /home/ubuntu/.plannotator
