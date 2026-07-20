@@ -66,6 +66,9 @@ All paths are relative to repo root unless noted.
 | Restore only the openwiki config (`~/.openwiki/.env`) | `bash scripts/restore-secrets.sh --include openwiki` |
 | Run the secrets backup/restore round-trip test (synthetic $HOME, 34 assertions) | `bash scripts/test-secrets-backup-restore.sh` |
 | Register the weekly secrets-test smoke cron (no_agent, Sun 04:00 Bogota) | `bash scripts/register-secrets-test-cron.sh` |
+| Validate a project's Varlock schema (no secrets leave the machine) | `varlock load --agent` |
+| Audit a project for schema/code drift | `varlock audit .` |
+| Scan for leaked values after a schema change | `varlock scan --staged` |
 | Snapshot irreplaceable state to a daily tarball | `bash scripts/backup-mercury-state.sh` |
 | Lint all YAML | `yamllint -c .yamllint.yml --strict .` |
 | Lint all bash | `shellcheck scripts/*.sh` |
@@ -154,6 +157,18 @@ catches most issues before push.
   file, or `--include code-env` for all. The legacy `x_digest_env` /
   `scriptcaster_env` blocks remain as ALIASES for back-compat with old
   `--include x-digest` / `--include scriptcaster` filters.
+- **Varlock (`1.11.0`) + `pass` (`1.7.4`) are installed but not yet wired
+  to any project.** They are the Stage 1 of the varlock implementation
+  plan (notion: see 2026-07-19 research note; plan file at
+  `~/.hermes/plans/2026-07-19_140710-varlock-local-secrets-store.md`).
+  The pinned install paths are `~/.local/bin/varlock` (release-tarball
+  binary, SHA-256 in `packages/cargo.yaml#release_tarball_bins`) and
+  `/usr/bin/pass` (apt). `~/.password-store` and any GPG secret key
+  are intentionally NOT yet created — that's Stage 2 (human TTY work).
+  Agents MUST NOT create the pass store or a GPG identity, MUST NOT
+  read or print project `.env` files, and MUST NOT pass `--format
+  json-full` / `env` / `shell` / `reveal` to varlock. Use only
+  `varlock load --agent` (redacted JSON) for any schema inspection.
 - **`restore-secrets.sh --env` refuses to overwrite a non-empty target**
   unless `--force` is passed. This protects against a typo mapping the
   wrong kind to a working `.env` in another repo. Use `--force` only when

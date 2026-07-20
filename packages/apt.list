@@ -2,6 +2,14 @@
 # Only packages that diverge from Ubuntu Server defaults are worth tracking —
 # anything not here is "Ubuntu took care of it."
 # Regenerate with: scripts/capture.sh
+#
+# ── varlock secrets plan (Stage 1, 2026-07-20) ────────────────────────────
+# `pass` is the apt-side half of the varlock plan: GPG-encrypted tree
+# underneath the committed `.env.schema` files in each project. It is
+# installed but the store (and any GPG identity) are intentionally NOT yet
+# initialized — that's Stage 2 (human TTY work). See AGENTS.md → "Varlock".
+# `varlock` itself is a release-tarball binary, not apt; see
+# packages/cargo.yaml → release_tarball_bins.
 
 base-files
 bash
