@@ -69,6 +69,8 @@ All paths are relative to repo root unless noted.
 | Validate a project's Varlock schema (no secrets leave the machine) | `varlock load --agent` |
 | Audit a project for schema/code drift | `varlock audit .` |
 | Scan for leaked values after a schema change | `varlock scan --staged` |
+| Prove a `pass` entry decrypts non-interactively from a cold `gpg-agent` (synthetic HOME) | `bash scripts/probe-varlock-cold-decrypt.sh` (10 assertions, ~3s) |
+| Prove a `pass` store round-trips through `tar` + restore (synthetic HOME) | `bash scripts/probe-varlock-pass-backup-restore.sh` (12 assertions, ~3s) |
 | Snapshot irreplaceable state to a daily tarball | `bash scripts/backup-mercury-state.sh` |
 | Lint all YAML | `yamllint -c .yamllint.yml --strict .` |
 | Lint all bash | `shellcheck scripts/*.sh` |
@@ -169,6 +171,24 @@ catches most issues before push.
   read or print project `.env` files, and MUST NOT pass `--format
   json-full` / `env` / `shell` / `reveal` to varlock. Use only
   `varlock load --agent` (redacted JSON) for any schema inspection.
+- **Stage 2 critical gate (cold-agent non-interactive decrypt) is
+  PROVEN green on this host.** `scripts/probe-varlock-cold-decrypt.sh`
+  asserts (10 assertions, ~3s) that a `pass` entry decrypts in a
+  synthetic HOME with the `gpg-agent` killed and the agent socket
+  cleared — i.e. the cron scenario. Stage 2 humans will create the
+  production GPG identity + `~/.password-store` + canary entry in a
+  TTY; the agent rules from the previous bullet still apply (no agent
+  creation, no pass-store init, no value reads). See
+  `~/.hermes/plans/2026-07-20_225129-varlock-stage2-human-recipe.md`
+  for the ready-to-paste recipe.
+- **Ubuntu Noble `pass 1.7.4-6` has a stdin-pipe bug in `pass insert -f`**:
+  when input is piped via stdin/heredoc/herestring, it falls into the
+  interactive `read -p "Enter password..."` branch and silently exits 1,
+  creating empty subdirectories but no ciphertext. **Interactive
+  `pass insert` in a real TTY works correctly** because `read -p` reads
+  from the terminal as intended. Stage 3 backup scripts must NOT pipe
+  to `pass insert`; encrypt via direct `gpg --batch --pinentry-mode
+  loopback -e -r <FP>` instead (same shape the probes use).
 - **`restore-secrets.sh --env` refuses to overwrite a non-empty target**
   unless `--force` is passed. This protects against a typo mapping the
   wrong kind to a working `.env` in another repo. Use `--force` only when
