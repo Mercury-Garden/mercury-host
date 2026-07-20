@@ -81,6 +81,11 @@ bash scripts/restore-secrets.sh --include code-env    # restore ALL auto-discove
 # Snapshot full host state (irreplaceable configs) to a daily tarball
 bash scripts/backup-mercury-state.sh                  # one-off
 sudo systemctl status mercury-state-backup.timer     # daily at 03:00 America/Bogota
+
+# Varlock secrets schema (Stage 1 — installed, not yet wired to any project)
+varlock --version                                     # 1.11.0
+pass --version                                        # 1.7.4
+varlock load --agent                                  # validate a schema, redacted
 ```
 
 ## Secrets backup & restore
