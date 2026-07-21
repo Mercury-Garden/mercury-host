@@ -69,6 +69,8 @@ All paths are relative to repo root unless noted.
 | Validate a project's Varlock schema (no secrets leave the machine) | `varlock load --agent` |
 | Audit a project for schema/code drift | `varlock audit .` |
 | Scan for leaked values after a schema change | `varlock scan --staged` |
+| Validate varlock schema + gpg-agent pre-flight (cron use, exit 1-5 on failure) | `bash scripts/varlock-preflight.sh <project-path>` |
+| Reference doc for `~/.hermes/cron/jobs.json#x-digest-daily` (Varlock plan Stage 5) | `cron-recipes/x-digest-daily.md` |
 | Prove a `pass` entry decrypts non-interactively from a cold `gpg-agent` (synthetic HOME) | `bash scripts/probe-varlock-cold-decrypt.sh` (10 assertions, ~3s) |
 | Prove a `pass` store round-trips through `tar` + restore (synthetic HOME) | `bash scripts/probe-varlock-pass-backup-restore.sh` (12 assertions, ~3s) |
 | Snapshot irreplaceable state to a daily tarball | `bash scripts/backup-mercury-state.sh` |
