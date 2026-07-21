@@ -942,6 +942,9 @@ if in_include varlock-pass; then
     # gpg --import is idempotent — re-importing the same key prints a
     # "already in keyring" notice and exits 0. --batch suppresses any
     # pinentry prompt; --yes avoids the "import anyway?" confirmation.
+    # Inline env var (HOME/GNUPGHOME) scopes the import to the synthetic
+    # HOME; this is intentional, not a shellcheck SC2097 false positive.
+    # shellcheck disable=SC2097,SC2098
     IMPORT_OUT=$(HOME="$HOME" GNUPGHOME="$HOME/.gnupg" gpg --batch --yes \
         --pinentry-mode loopback --import "$ARMORED_TMP" 2>&1 || true)
     if echo "$IMPORT_OUT" | grep -qE '(imported|unchanged|new signatures)'; then

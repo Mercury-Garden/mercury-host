@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash disable=SC2012,SC2016
 # scripts/test-varlock-backup-restore.sh — Stage 3 round-trip test.
 #
 # Proves that the varlock_pass_store_tar_gz + varlock_gpg_private_tar_gz
