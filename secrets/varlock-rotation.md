@@ -221,9 +221,17 @@ The retention policy for migration-era backups:
 | `scripts/probe-varlock-pass-backup-restore.sh` | Prove pass entries round-trip through tar+restore | After any backup/restore change |
 | `scripts/audit.sh` (the `[varlock]` section) | Drift check: bin versions, store modes, canary | Daily (cron-driven via `register-secrets-test-cron.sh`) |
 
+
+## Off-host recovery — operator confirmation (2026-07-21)
+
+* Status: confirmed by edsadr on 2026-07-21 (this Discord thread)
+* Method: operator-controlled encrypted vault / device
+* File: `mercury-recovery-1784588781.asc.gpg` (sha256
+  `c61505f0b20766e32b49ee41aad4c889ce2d4baa50b71862b1f01c84817edb5d`)
+* Specific destination: deliberately **not** recorded here — out-of-band
+  per agent transcript hygiene. See operator for retrieval info.
+* Next refresh: re-verify annually (anniversary 2027-07) or on
+  GPG key rotation, whichever comes first.
+
 ## Cross-references
 
-* `secrets/inventory.yaml` — fingerprint pin (one line: `varlock-pass-store:` block)
-* `secrets/secrets.yaml.template` — sanitized inventory (placeholder blocks)
-* `AGENTS.md` — operator-facing rules
-* `cron-recipes/x-digest-daily.md` — runtime invocation example
