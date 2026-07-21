@@ -125,6 +125,23 @@ if (!MISE_NODE_BIN || !existsSync(MISE_NODE_BIN)) {
   }
 }
 
+// Pool A root for locateInstalledVersion() — sibling of MISE_NODE_BIN, but
+// pointing at `lib/node_modules` instead of `bin`. Where `npm install -g`
+// writes package.json files. Computed by stripping `/bin` from MISE_NODE_BIN
+// (the trailing `/bin` -> `/lib/node_modules`). Falls back to the hardcoded
+// `installs/node/24/lib/node_modules` if the derivation fails.
+const MISE_NODE_MODULES = (() => {
+  const fromBin = MISE_NODE_BIN.replace(/\/bin$/, '/lib/node_modules')
+  if (existsSync(fromBin)) return fromBin
+  for (const cand of [
+    join(MISE_DATA_DIR, 'installs/node/24/lib/node_modules'),
+    join(HOME, '.local/share/mise/installs/node/24/lib/node_modules'),
+  ]) {
+    if (existsSync(cand)) return cand
+  }
+  return fromBin
+})()
+
 // Pnpm_HOME_DIR may be set explicitly. Default to ~/.local/share/pnpm
 // (also on data volume via symlink).
 const Pnpm_HOME_DIR = process.env.Pnpm_HOME || (() => {
@@ -227,19 +244,50 @@ const pkgField = (path: string, field: string): string | null => {
   } catch { return null }
 }
 
-// ─── Helper: locate the on-disk version of a plugin across BOTH opencode
-// runtime storage pools (npm-global-installed globals AND the opencode
-// per-user cache used by `opencode plugin add`). Returns null when missing. ──
-// (Volta's image-managed global pool used to be Pool 1; post-2026-07-18
-//  global npm installs land at ~/.npm-global/ or wherever npm decides;
-//  we check the opencode per-user cache as a definitive fallback.)
-const locateInstalledVersion = (pkg: string): string | null => {
-  // Pool 1: opencode per-user cache (most reliable post-migration)
-  //   ~/.cache/opencode/packages/<pkg>/package.json
-  //    (Plus possibly one level deeper for bundled native binaries.)
+// ─── Helper: locate the on-disk version of a plugin across BOTH storage pools ─
+//
+// Two pools exist on mercury (verified 2026-07-21 after cron 45125c66ddd4
+// reported `installed: null` for opencode-ai despite 1.18.3 being on disk):
+//
+//   Pool A — mise-managed node globals (the AUTHORITATIVE source of truth for
+//            `npm install -g <pkg>@latest` writes post-2026-07-18). Lives at
+//            ~/.local/share/mise/installs/node/24/lib/node_modules/<pkg>/
+//            package.json, with scoped packages under
+//            ~/.local/share/mise/installs/node/24/lib/node_modules/@scope/
+//            <pkg>/package.json. Note: `~/.local/share` itself is a symlink
+//            to the data volume (/home/ubuntu/data/.local/share), but the
+//            `…/lib/node_modules/<pkg>/package.json` path resolves through
+//            it transparently.
+//
+//   Pool B — opencode per-user cache (~/.cache/opencode/packages/<pkg>/
+//            package.json, sometimes one level deeper for bundled natives).
+//            This pool was historically where opencode-ai and its plugins
+//            lived under volta (pre-2026-07-18). Post-migration, npm-global
+//            installs write to Pool A directly; Pool B is only refreshed by
+//            `opencode plugin add --force <pkg>`. The package.json files in
+//            Pool B can be empty/fixture manifests on a freshly-migrated box
+//            — `pkgField()` then returns null, which is what triggered the
+//            2026-07-21 cron misreport.
+//
+// We walk Pool A first because it is where `npm install -g` actually writes,
+// and Pool B as a fallback for tools that only exist in the opencode cache.
+// Exported for the regression test in scripts/test-devtools-upgrade-pool-a.sh.
+export const locateInstalledVersion = (pkg: string): string | null => {
+  // Pool A: ~/.local/share/mise/installs/node/24/lib/node_modules/<pkg>/package.json
+  // Scoped packages live one level deeper under @scope/.
+  const poolA = join(MISE_NODE_MODULES, pkg, 'package.json')
+  const vA = pkgField(poolA, 'version')
+  if (vA) return vA
+  // Scoped form: <dir>/@scope/<pkg>/package.json
+  if (pkg.startsWith('@')) {
+    const vA2 = pkgField(join(MISE_NODE_MODULES, pkg, 'package.json'), 'version')
+    if (vA2) return vA2
+  }
+  // Pool B: ~/.cache/opencode/packages/<pkg>/package.json
+  //   (Plus possibly one level deeper for bundled native binaries.)
   const ocRoot = join(HOME, '.cache/opencode/packages', pkg, 'package.json')
-  const v2 = pkgField(ocRoot, 'version')
-  if (v2) return v2
+  const vB = pkgField(ocRoot, 'version')
+  if (vB) return vB
   const ocInner = join(HOME, '.cache/opencode/packages', pkg, 'node_modules', pkg, 'package.json')
   return pkgField(ocInner, 'version')
 }
@@ -918,11 +966,11 @@ const STANDALONE_NPM_CLIS = [
 
 async function auditOpencodePlugin(name: string): Promise<void> {
   // Installed version comes from the unified on-disk search via
-  // locateInstalledVersion — searches the opencode plugin cache as the
-  // runtime source of truth. `npm install -g` writes to npm's global
-  // prefix; the cache reflects a subsequent `opencode` runtime load.
-  const installedCache = locateInstalledVersion(name)
-  const installed = installedCache
+  // locateInstalledVersion — searches Pool A (mise-managed npm globals)
+  // first, then Pool B (opencode cache) as a fallback. `npm install -g`
+  // writes to Pool A; the cache reflects a subsequent `opencode` runtime
+  // load.
+  const installed = locateInstalledVersion(name)
   const latest = await npmLatest(name)
   if (!latest) { emit({ tool: name, installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' }); return }
   if (!installed || cmpVer(installed, latest) >= 0) {
@@ -932,9 +980,32 @@ async function auditOpencodePlugin(name: string): Promise<void> {
   const u = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade(name)))
   // After install, refresh the on-disk read; the npm global prefix is
   // what `npm install -g` just touched, so the post-install truth comes
-  // back through locateInstalledVersion (cache or global prefix).
+  // back through locateInstalledVersion (Pool A now; Pool B on miss).
   const after = locateInstalledVersion(name)
-  emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+  // False-upgrade guard (captured 2026-07-21, cron 45125c66ddd4):
+  // `npm install -g <pkg>@latest --silent` exits 0 even when nothing
+  // actually got replaced (pitfall #12 in devtools-upgrade-plan). When
+  // the post-install version equals the pre-install version AND the
+  // exit was clean, the install was a no-op — emit `noop` with an
+  // annotation instead of falsely claiming `upgraded`. Common cause:
+  // npm's metadata cache served a stale `/latest`, or the registry
+  // had a transient error that npm swallowed.
+  const actuallyUpgraded = !u.err && after !== null && after !== installed
+  const error = actuallyUpgraded
+    ? u.err
+    : (!u.err && after === installed
+        ? `npm exited 0 but on-disk version unchanged (installed=${installed}, latest=${latest}); metadata cache may be stale, or registry returned a cached older version`
+        : u.err)
+  emit({
+    tool: name,
+    installed,
+    latest: after ?? latest,
+    action: u.err ? 'failed' : (actuallyUpgraded ? 'upgraded' : 'noop'),
+    old: installed,
+    new: after,
+    duration_ms: u.ms,
+    error,
+  })
 }
 
 async function auditStandaloneNpmCli(name: string): Promise<void> {
@@ -952,7 +1023,24 @@ async function auditStandaloneNpmCli(name: string): Promise<void> {
   }
   const u = await timed(() => Promise.resolve().then(() => npmGlobalUpgrade(name)))
   const after = locateInstalledVersion(name)
-  emit({ tool: name, installed, latest: after ?? latest, action: u.err ? 'failed' : 'upgraded', old: installed, new: after, duration_ms: u.ms, error: u.err })
+  // False-upgrade guard — same shape as auditOpencodePlugin. See the comment
+  // there for the pitfall #12 backstory.
+  const actuallyUpgraded = !u.err && after !== null && after !== installed
+  const error = actuallyUpgraded
+    ? u.err
+    : (!u.err && after === installed
+        ? `npm exited 0 but on-disk version unchanged (installed=${installed}, latest=${latest}); metadata cache may be stale, or registry returned a cached older version`
+        : u.err)
+  emit({
+    tool: name,
+    installed,
+    latest: after ?? latest,
+    action: u.err ? 'failed' : (actuallyUpgraded ? 'upgraded' : 'noop'),
+    old: installed,
+    new: after,
+    duration_ms: u.ms,
+    error,
+  })
 }
 
 // ─── Main ──────────────────────────────────────────────────────────────────
