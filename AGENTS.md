@@ -172,15 +172,22 @@ catches most issues before push.
   json-full` / `env` / `shell` / `reveal` to varlock. Use only
   `varlock load --agent` (redacted JSON) for any schema inspection.
 - **Stage 2 critical gate (cold-agent non-interactive decrypt) is
-  PROVEN green on this host.** `scripts/probe-varlock-cold-decrypt.sh`
-  asserts (10 assertions, ~3s) that a `pass` entry decrypts in a
-  synthetic HOME with the `gpg-agent` killed and the agent socket
-  cleared — i.e. the cron scenario. Stage 2 humans will create the
-  production GPG identity + `~/.password-store` + canary entry in a
-  TTY; the agent rules from the previous bullet still apply (no agent
-  creation, no pass-store init, no value reads). See
-  `~/.hermes/plans/2026-07-20_225129-varlock-stage2-human-recipe.md`
-  for the ready-to-paste recipe.
+  PROVEN green on this host with the production key.** Stage 2 closed
+  2026-07-20. Production fingerprint: `1783B58858FD26D16D4BF58C490FE2DCACFEE578`
+  (Curve 25519, 2-year expiry, unprotected — chosen for cron-compatible
+  unattended decrypt on this single-user host). `~/.password-store/`
+  is initialized, `.gpg-id` is the fingerprint, and one synthetic
+  canary lives at `mercury/_canary/test.gpg`. Hermes verified cold-agent
+  decrypt twice during Stage 2 (once via the throwaway probe in PR #83,
+  once against the production key after bootstrap). Recovery bundle
+  lives off-host; symmetric passphrase stored in a different place.
+  Agents MUST NOT create the pass store or a GPG identity, MUST NOT
+  read or print project `.env` files, and MUST NOT pass `--format
+  json-full` / `env` / `shell` / `reveal` to varlock. Use only
+  `varlock load --agent` (redacted JSON) for any schema inspection.
+  The four Stage 2 pitfalls (empty-passphrase refusal, pass stdin-pipe
+  bug, pass not accepting --pinentry-mode, zsh nomatch) are documented
+  in skill `devops/gpg-pass-store-bootstrap-on-headless-terminal`.
 - **Ubuntu Noble `pass 1.7.4-6` has a stdin-pipe bug in `pass insert -f`**:
   when input is piped via stdin/heredoc/herestring, it falls into the
   interactive `read -p "Enter password..."` branch and silently exits 1,
