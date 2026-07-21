@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck shell=bash disable=SC2097,SC2098
+# shellcheck shell=bash disable=SC2097,SC2098,SC2015,SC2016
 #
 # scripts/probe-varlock-cold-decrypt.sh — Stage 2 critical gate.
 #
