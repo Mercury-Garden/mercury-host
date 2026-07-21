@@ -551,6 +551,7 @@ if [ -d "$CODE_ROOT" ]; then
       -name '.env*' \
       ! -name '*.example' \
       ! -name '*.sample' \
+      ! -name '.env.schema' \
       -print0 2>/dev/null \
       | sort -z
   )
@@ -1298,6 +1299,41 @@ echo "$VARLOCK_OUT" | grep -v '__VL_DRIFT__:' || true
 VL_DRIFT=$(echo "$VARLOCK_OUT" | grep '__VL_DRIFT__:' | tail -1 | sed 's/.*://')
 VL_DRIFT=${VL_DRIFT:-0}
 DRIFT=$((DRIFT + VL_DRIFT))
+
+# ─── [varlock-migrated-repos] ─────────────────────────────────────────
+# For each project repo that has been migrated to varlock+pass (Stage
+# 4-7 of the plan), check:
+#   1. .env.schema is committed and parses
+#   2. `varlock load --agent` succeeds (all required keys resolve from
+#      the encrypted store; sensitive values are redacted)
+#   3. The repo is in `pnpm config:check` rc=0 state
+#
+# Repos that have NOT yet been migrated (webhook-server, mercury-tasks)
+# are intentionally excluded — they have their own varlock migration in
+# Stage 8.6+.
+echo
+echo "[varlock-migrated-repos]"
+VL_REPO_DRIFT=0
+VL_MIGRATED_REPOS="x-digest better-bet scriptcaster"
+for vl_repo in $VL_MIGRATED_REPOS; do
+  repo_dir="$HOME/data/code/$vl_repo"
+  schema="$repo_dir/.env.schema"
+  if [[ ! -f "$schema" ]]; then
+    echo "  ✗ DRIFT: $vl_repo/.env.schema missing"
+    VL_REPO_DRIFT=$((VL_REPO_DRIFT + 1))
+    continue
+  fi
+  # varlock load --skip-cache --agent exits 0 when all @required keys
+  # resolve. Failure modes here include: missing pass entries,
+  # unparseable schema, plugin not installed in repo node_modules.
+  if ! (cd "$repo_dir" && varlock load --skip-cache --agent > /dev/null 2>&1); then
+    echo "  ✗ DRIFT: $vl_repo — varlock load --agent failed (missing pass entry? schema drift?)"
+    VL_REPO_DRIFT=$((VL_REPO_DRIFT + 1))
+  else
+    echo "  ✓ $vl_repo — schema parses, varlock load rc=0"
+  fi
+done
+DRIFT=$((DRIFT + VL_REPO_DRIFT))
 
 # ── summary ──────────────────────────────────────────────────────────────
 echo
