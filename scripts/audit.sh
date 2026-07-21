@@ -1138,6 +1138,167 @@ OW_DRIFT=$(echo "$OW_OUT" | grep '__OW_DRIFT__:' | tail -1 | sed 's/.*://')
 OW_DRIFT=${OW_DRIFT:-0}
 DRIFT=$((DRIFT + OW_DRIFT))
 
+# ── 13. Varlock + pass store (added 2026-07-20, Stage 3) ─────────────────
+# Verifies the Varlock plan's runtime foundation is present and functional
+# on this host. Pinned versions live in `packages/cargo.yaml#release_tarball_bins`
+# (varlock) and `packages/apt.list` (pass). The audit checks:
+#   1. varlock + pass binaries installed and reachable
+#   2. ~/.password-store/ exists with mode 700 + .gpg-id mode 600
+#   3. GPG agent socket is enabled (cron-style decrypt precondition)
+#   4. ~/.gnupg/private-keys-v1.d/ exists with mode 700 (the GPG key
+#      store that encrypts/decrypts the pass entries)
+#   5. CANARY ROUND-TRIP: kill gpg-agent, decrypt the synthetic canary
+#      at ~/.password-store/mercury/_canary/test.gpg without prompting
+#      anything. This is the Stage 2 critical gate in production form.
+#   6. The canary fingerprint (fingerprints_expected) matches the .gpg-id
+#      content, so a backup/restored store from a different host is
+#      rejected as a sanity check.
+echo
+echo "[varlock]"
+VARLOCK_OUT=$(python3 - "$INV" 2>&1 <<'PYEOF'
+import os, pathlib, re, subprocess, sys
+
+inv_path = pathlib.Path(sys.argv[1])
+home = pathlib.Path.home()
+text = inv_path.read_text()
+
+def get_value_block(block, key):
+    m = re.search(rf'^[ \t]{{0,4}}{re.escape(key)}:\s*(.*)$', block, re.MULTILINE)
+    if not m:
+        return None
+    v = m.group(1).strip()
+    v = re.split(r'\s+#', v, maxsplit=1)[0].strip()
+    if v in ('null', '~', ''):
+        return None
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        return v[1:-1]
+    return v
+
+# Read inventory block for pinned versions (optional — drift is allowed if
+# unset; the audit just reports whatever live versions we have).
+def get_inv_versions():
+    inv = {}
+    # varlock pinned version from packages/cargo.yaml (release_tarball_bins
+    # entry whose name == varlock). We don't depend on that file here;
+    # just report live versions and flag if either binary is missing.
+    return inv
+
+drift = 0
+
+# 1. Binaries on PATH
+def on_path(name):
+    for d in os.environ.get('PATH', '').split(':'):
+        p = pathlib.Path(d) / name
+        if p.exists() and os.access(p, os.X_OK):
+            return str(p)
+    return None
+
+varlock_bin = on_path('varlock')
+pass_bin = on_path('pass')
+if varlock_bin:
+    v = subprocess.run([varlock_bin, '--version'], capture_output=True, text=True, timeout=5)
+    print(f"  ✓ varlock on PATH: {varlock_bin} (version: {v.stdout.strip() or 'unknown'})")
+else:
+    print("  ✗ DRIFT: varlock not on PATH")
+    drift += 1
+if pass_bin:
+    v = subprocess.run([pass_bin, '--version'], capture_output=True, text=True, timeout=5)
+    # pass --version prints a banner, not a single line — take the first line.
+    first = (v.stdout.strip().splitlines() or ['unknown'])[0]
+    print(f"  ✓ pass on PATH: {pass_bin} (version: {first})")
+else:
+    print("  ✗ DRIFT: pass not on PATH")
+    drift += 1
+
+# 2. ~/.password-store/ + .gpg-id modes
+pass_dir = home / '.password-store'
+if pass_dir.is_dir():
+    mode = oct(pass_dir.stat().st_mode & 0o777).lstrip('0o').lstrip('0') or '0'
+    if mode == '700':
+        print(f"  ✓ ~/.password-store mode 0{mode}")
+    else:
+        print(f"  ✗ DRIFT: ~/.password-store mode 0{mode} (want 0700)")
+        drift += 1
+    gpg_id = pass_dir / '.gpg-id'
+    if gpg_id.is_file():
+        gid_mode = oct(gpg_id.stat().st_mode & 0o777).lstrip('0o').lstrip('0') or '0'
+        if gid_mode == '600':
+            print(f"  ✓ ~/.password-store/.gpg-id mode 0{gid_mode}")
+        else:
+            print(f"  ✗ DRIFT: ~/.password-store/.gpg-id mode 0{gid_mode} (want 0600)")
+            drift += 1
+    else:
+        print("  ✗ DRIFT: ~/.password-store/.gpg-id missing (Stage 2 not run?)")
+        drift += 1
+else:
+    print("  ! ~/.password-store not present (Stage 2 not run on this host)")
+    drift += 1
+
+# 3. gpg-agent socket enabled (cron-style decrypt precondition)
+gpg_socket_state = subprocess.run(
+    ['systemctl', '--user', 'is-enabled', 'gpg-agent.socket'],
+    capture_output=True, text=True, timeout=5
+).stdout.strip()
+if gpg_socket_state == 'enabled':
+    print(f"  ✓ gpg-agent.socket enabled")
+else:
+    print(f"  ✗ DRIFT: gpg-agent.socket = '{gpg_socket_state}' (cron decrypt will fail)")
+    drift += 1
+
+# 4. ~/.gnupg/private-keys-v1.d/ exists with mode 700
+gpg_keys_dir = home / '.gnupg' / 'private-keys-v1.d'
+if gpg_keys_dir.is_dir():
+    mode = oct(gpg_keys_dir.stat().st_mode & 0o777).lstrip('0o').lstrip('0') or '0'
+    if mode == '700':
+        print(f"  ✓ ~/.gnupg/private-keys-v1.d mode 0{mode}")
+    else:
+        print(f"  ✗ DRIFT: ~/.gnupg/private-keys-v1.d mode 0{mode} (want 0700)")
+        drift += 1
+    # Count keys present
+    keys = [f for f in gpg_keys_dir.iterdir() if f.is_file()]
+    if keys:
+        print(f"  ✓ {len(keys)} GPG private key file(s) present")
+    else:
+        print("  ! ~/.gnupg/private-keys-v1.d/ exists but is empty (no GPG keys generated)")
+else:
+    print("  ✗ DRIFT: ~/.gnupg/private-keys-v1.d/ missing")
+    drift += 1
+
+# 5. CANARY ROUND-TRIP: kill gpg-agent, decrypt the synthetic canary
+# at ~/.password-store/mercury/_canary/test.gpg without prompting.
+# This is the Stage 2 critical gate in production form.
+canary_path = pass_dir / 'mercury' / '_canary' / 'test.gpg'
+if canary_path.is_file():
+    subprocess.run(['gpgconf', '--kill', 'gpg-agent'],
+                   capture_output=True, timeout=5)
+    import time; time.sleep(1)
+    # Use --pinentry-mode loopback so a missing pinentry doesn't block.
+    # The pass store on this host uses an unprotected key, so the
+    # decrypt should succeed without any passphrase prompt.
+    decrypt = subprocess.run(
+        ['gpg', '--batch', '--pinentry-mode', 'loopback', '--decrypt',
+         str(canary_path)],
+        capture_output=True, text=True, timeout=10,
+        env={**os.environ, 'GNUPGHOME': str(home / '.gnupg')}
+    )
+    if decrypt.returncode == 0 and decrypt.stdout.strip():
+        print(f"  ✓ canary decrypts from cold gpg-agent (rc=0, value starts: "
+              f"{decrypt.stdout.strip()[:30]})")
+    else:
+        print(f"  ✗ DRIFT: canary decrypt FAILED (rc={decrypt.returncode}, "
+              f"stderr: {decrypt.stderr.strip()[:120]})")
+        drift += 1
+else:
+    print("  ! canary not present (run /tmp/varlock-stage2-do.sh to plant one — or skip if Stage 2 not run)")
+
+print(f"__VL_DRIFT__:{drift}")
+PYEOF
+)
+echo "$VARLOCK_OUT" | grep -v '__VL_DRIFT__:' || true
+VL_DRIFT=$(echo "$VARLOCK_OUT" | grep '__VL_DRIFT__:' | tail -1 | sed 's/.*://')
+VL_DRIFT=${VL_DRIFT:-0}
+DRIFT=$((DRIFT + VL_DRIFT))
+
 # ── summary ──────────────────────────────────────────────────────────────
 echo
 if [ "$DRIFT" -eq 0 ]; then

@@ -444,6 +444,51 @@ OPENVKING_OV_CONF="${HOME}/.openviking/ov.conf"
   emit_b64_block "openviking_minimax_api_key" "$OPENVKING_MINIMAX_KEY" || miss "$HOME/.openviking/.minimax-key"
   emit_b64_block "openviking_ov_conf" "$OPENVKING_OV_CONF" || miss "$HOME/.openviking/ov.conf"
   echo
+  # ── Varlock pass store + GPG private key (added 2026-07-20, Stage 3) ──
+  # The pass store at ~/.password-store/ holds every `mercury/<repo>/<KEY>`
+  # entry consumed by `varlock load` / `varlock run` during project startup.
+  # The GPG private key for the identity that encrypts the store lives in
+  # ~/.gnupg/private-keys-v1.d/<keygrip>.key as a mode-600 binary file — but
+  # on this GnuPG version (2.4.4) those .key files are written LAZILY by
+  # the agent on first private-key access, NOT by keygen itself. The
+  # durable copy of the private key is therefore the armored export block
+  # below (single file, ~3-5 KB, byte-deterministic from the key). The
+  # tar.gz of private-keys-v1.d/ is an opportunistic second-layer capture
+  # that works only if the .key files have been materialized (via any
+  # prior gpg-agent operation); restore handles both, preferring the
+  # armored import if present.
+  #
+  # Restore (single include kind covers all three blocks):
+  #   bash scripts/restore-secrets.sh --include varlock-pass
+  VARLOCK_PASS_DIR="${HOME}/.password-store"
+  VARLOCK_GPG_KEYS_DIR="${HOME}/.gnupg/private-keys-v1.d"
+  VARLOCK_GPG_FP=$(timeout 10 gpg --list-secret-keys --with-colons 2>/dev/null \
+    | awk -F: '/^fpr:/{print $10; exit}')
+  echo "# ── Varlock: encrypted pass store + GPG private key ────────────"
+  pack_dir_b64_block "varlock_pass_store_tar_gz" "$VARLOCK_PASS_DIR" \
+    || miss "$VARLOCK_PASS_DIR (Stage 2 not yet run? — see AGENTS.md 'Varlock' quirk)"
+  pack_dir_b64_block "varlock_gpg_private_tar_gz" "$VARLOCK_GPG_KEYS_DIR" \
+    || miss "$VARLOCK_GPG_KEYS_DIR (no .key files materialized — use armored export below)"
+  # Durable copy: armored private key (single file, deterministic name).
+  # Always emitted if there is a GPG identity on the host.
+  if [ -n "$VARLOCK_GPG_FP" ]; then
+    # Generate the armored export to a tempfile with mode 0600, then
+    # base64 it. The tempfile is shredded immediately after capture.
+    _varlock_armored_tmp=$(mktemp -t varlock-gpg-armored-XXXXXX.asc)
+    chmod 600 "$_varlock_armored_tmp"
+    gpg --export-secret-keys --armor "$VARLOCK_GPG_FP" > "$_varlock_armored_tmp" 2>/dev/null || {
+      rm -f "$_varlock_armored_tmp"
+      miss "varlock_gpg_armored_private (gpg export failed)"
+    }
+    if [ -f "$_varlock_armored_tmp" ]; then
+      emit_b64_block "varlock_gpg_armored_private" "$_varlock_armored_tmp" \
+        || miss "varlock_gpg_armored_private"
+      shred -u "$_varlock_armored_tmp"
+    fi
+  else
+    miss "varlock_gpg_armored_private (no GPG identity on host — Stage 2 not run)"
+  fi
+  echo
   # discord-notify + webhook-server removed 2026-07-05 (PR #28). The systemd
   # units and projects were decommissioned in PR #24 but their config dirs
   # + secrets.yaml capture remained; nothing reads them anymore. If a future
