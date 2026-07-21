@@ -166,7 +166,7 @@ cron:
       - id: 59b7302d21b7
         name: x-digest-daily
         schedule: "0 14 * * 1-5"
-      - id: 45125c66ddd4
+      - id: d9cae3886311
         name: devtools-upgrade
         schedule: "0 11 * * *"
       - id: f9c44d64925e
@@ -280,12 +280,12 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-18T20-56-12Z"
-  last_size_mb: 748
-  last_file_count: 26837
-  last_sha256: "8fec084bfdd2df40200002023118964ccd0c918624854d5c58275bb025ca3511"
-  last_verify_ok: "5/5"
-  last_verify_at: "2026-07-18T20-58-33Z"
+  last_run_at: "2026-07-21T08-00-31Z"
+  last_size_mb: 998
+  last_file_count: 73709
+  last_sha256: "6298c0f70412fe177ce91e7c24ea43496749664808854f49e291a89972729268"
+  last_verify_ok: "0/0"
+  last_verify_at: "2026-07-21T08-05-22Z"
   tarballs_on_disk: 7
   # ── Backup unit duplication history (resolved 2026-07-14) ────────────────
   # Two `mercury-state-backup.{timer,service}` units exist on this host,
@@ -586,7 +586,7 @@ projects:
     package_manager: pnpm@11.14.0
     pinned_node: "24"                 # floating; matches mise.toml in repo
     expected_branch: main
-    lockfile_sha256: 3e4e9798a86a    # capture.sh: refreshed x-digest
+    lockfile_sha256: c5119d966b9b    # capture.sh: refreshed x-digest
     owns_subdomain: null
     toolchain_pinned: true
 
