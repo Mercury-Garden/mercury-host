@@ -21,7 +21,7 @@ node_managers:
     home: ~/.local/share/mise       # resolves to /home/ubuntu/data/.local/share/mise via symlink
     binary: ~/.local/bin/mise
     default_node: "24"               # floating within-major; resolves to latest 24.x (audit compares semver-aware)
-    default_pnpm: 11.14.0             # mise-managed via `mise use --global pnpm@11.14.0`; resolves via shims dir on PATH
+    default_pnpm: 11.14.0
     cached_runtimes:
       - 24.18.0
     migration_note: |
