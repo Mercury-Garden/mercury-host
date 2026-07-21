@@ -83,6 +83,45 @@ Order matters: **lint → shellcheck → secrets-scan → audit dry-run**.
 That is the order CI runs them in; doing it locally in the same order
 catches most issues before push.
 
+### Varlock + Pass — manual upgrade policy
+
+`varlock` (pinned at 1.11.0) and `pass` (apt-managed; NOT pinned in this
+repo because its source-of-truth is Ubuntu Noble's apt pool) are
+**deliberately** excluded from `scripts/devtools-upgrade.ts`'s auto-upgrade
+loop. Reasons (Stage 8.3 of the Varlock plan):
+
+* **varlock**'s security policy supports only latest/main upstream, which
+  means deliberate version pinning + manual review is mandatory. Auto-upgrade
+  would silently move the production pinning; not appropriate.
+* **pass** is an apt package; its upgrade cadence is Ubuntu's choice, not ours.
+  The `[varlock]` section of `scripts/audit.sh` reports the live versions and
+  flags drift against any pin recorded in `inventory.yaml`.
+
+When a manual upgrade is desired, follow this recipe:
+
+```bash
+# 1. Audit current state and confirm the upgrade path
+bash scripts/audit.sh | grep -A 8 '\[varlock\]'
+
+# 2. Upgrade pass (apt; standard cron-managed)
+sudo apt-get install -y pass
+pass --version
+
+# 3. Upgrade varlock (from official Linux arm64 tarball; verify checksum)
+VER=1.12.0  # check varlock.dev/releases/latest for the current version
+ARCH=arm64
+wget -q "https://github.com/dmno-dev/varlock/releases/download/varlock%40${VER}/varlock-linux-${ARCH}.tar.gz" -O /tmp/vl.tar.gz
+sha256sum /tmp/vl.tar.gz    # compare to published checksums.txt
+tar -xzf /tmp/vl.tar.gz -C /tmp/
+install -m 0755 /tmp/varlock "${HOME}/.local/bin/varlock"
+rm -rf /tmp/varlock /tmp/vl.tar.gz
+varlock --version
+```
+
+Then run the round-trip test (`scripts/test-varlock-backup-restore.sh`)
+and `scripts/audit.sh` to confirm no drift before opening a PR that
+updates the version pin in `inventory.yaml`.
+
 ## Scripts: behavioral quirks worth knowing
 
 - **`audit.sh` reconstructs the user's PATH before checking mise.**

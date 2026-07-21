@@ -32,24 +32,44 @@ no overlap with cron jobs from other agents).
 ### Step 1 — `cd /home/ubuntu/data/code/x-digest`
 Already in the canonical workdir per `cron.jobs.json#workdir`. No-op in practice.
 
-### Step 2 — **Varlock preflight (NEW for Stage 5)**
+### Step 2 — **Varlock preflight (Stage 5; EXITS LOUD in Stage 5.5)**
 
 ```bash
 # Verify varlock can resolve all 8 schema keys WITHOUT touching secrets
 # (--agent redacts sensitive values). This catches gpg-agent / pass-store
 # issues BEFORE we attempt the pipeline.
+#
+# Stage 5.5 (2026-07-21): the legacy `source .env` fallback has been
+# removed. The cron recipe now exits with an actionable error if varlock
+# can't resolve the schema. The pre-flight script handles all error
+# modes (gpg-agent down, pass-store corruption, schema drift).
+if ! bash ~/.hermes/scripts/varlock-preflight.sh /home/ubuntu/data/code/x-digest; then
+  echo "varlock preflight failed: see ~/.hermes/cron/output/<date>/output.md for details" >&2
+  exit 1
+fi
+
+# varlock works; let step 4 invoke pnpm under varlock run --inject vars
+export VARLOCK_INJECT=ok
+```
+
+### Step 2a — **legacy .env fallback REMOVED in Stage 5.5**
+
+Before Stage 5.5 (until 2026-07-21 19:55 UTC), the recipe had this fallback:
+
+```bash
+# (legacy, removed 2026-07-21):
 if ! varlock load --agent --skip-cache > /dev/null 2>&1; then
   echo "varlock preflight failed: gpg-agent or pass-store issue; falling back to .env"
-  # Fallback to .env-restore (Stage 5 only; Stage 5.5 will instead exit loud)
   if ! [[ -f .env ]]; then
-    bash ~/.hermes/scripts/restore-secrets.sh --env /home/ubuntu/data/code/x-digest/.env
+    bash ~/.hermes/scripts/restore-secrets.sh --env /home/ubuntu/data/x-digest/.env
   fi
   set -a; source .env; set +a
-else
-  # varlock works; let step 4 invoke pnpm under varlock run --inject vars
-  export VARLOCK_INJECT=ok  # marker for step 4
 fi
 ```
+
+The legacy fallback existed only to ease the Stage 5 cutover; once we had two clean cron runs in production, the fallback became a footgun (silently restoring plaintext secrets if varlock fails). It has been removed.
+
+If you ever need to re-enable the fallback, it's git history; use a `git log` on `cron-recipes/x-digest-daily.md` to find the diff.
 
 ### Step 3 — **Removed** (was: `set -a && source .env && set +a`)
 The old step 3 (the `set -a; source .env; set +a`) is **only** invoked
