@@ -308,13 +308,13 @@ state_backup:
   retention_count: 7                         # keep last 7 tarballs (1 week of dailies)
   compression: zstd -9
   max_age_hours: 36                          # audit flags if no fresh backup >36h
-  last_run_at: "2026-07-21T08-00-31Z"
-  last_size_mb: 998
-  last_file_count: 73709
-  last_sha256: "6298c0f70412fe177ce91e7c24ea43496749664808854f49e291a89972729268"
-  last_verify_ok: "0/0"
-  last_verify_at: "2026-07-21T08-05-22Z"
-  tarballs_on_disk: 7
+  last_run_at: "2026-07-24T01-12-42Z"
+  last_size_mb: 1044
+  last_file_count: 75568
+  last_sha256: "04a4dab803422adef535ad72219155c9ab97e850322c254349e742f84973b28a"
+  last_verify_ok: "4/5"
+  last_verify_at: "2026-07-24T01-19-25Z"
+  tarballs_on_disk: 8
   # ── Backup unit duplication history (resolved 2026-07-14) ────────────────
   # Two `mercury-state-backup.{timer,service}` units exist on this host,
   # both pointing at the same repo files:
@@ -596,7 +596,7 @@ projects:
     package_manager: pnpm@11.14.0
     pinned_node: "24"                 # floating; matches mise.toml in repo
     expected_branch: main
-    lockfile_sha256: a5904bd36258    # capture.sh: refreshed scriptcaster
+    lockfile_sha256: 76591bf446a4    # capture.sh: refreshed scriptcaster
     owns_subdomain: null
     toolchain_pinned: true
 
