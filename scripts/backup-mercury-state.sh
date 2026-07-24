@@ -106,6 +106,18 @@ BACKUP_PATHS=(
     /home/ubuntu/data/code/x-digest/.env
     /home/ubuntu/data/code/scriptcaster/.env
     /home/ubuntu/.config/openchamber/startup.env
+    /home/ubuntu/.omniroute/.env
+    # ── OmniRoute runtime state (added 2026-07-24) ─────────────────────────
+    # ~/.omniroute/ holds the storage.sqlite (request history, provider
+    # config, call_logs) and a .env file containing STORAGE_ENCRYPTION_KEY
+    # (mode 0600 — needed to decrypt storage.sqlite on restore). Total ~3.4
+    # MB. The .env is also captured by backup-secrets.sh → omniroute_env
+    # b64 block (see secrets/inventory.yaml#omniroute-env), so we have
+    # two-layer recovery; this entry means the daily tarball alone is
+    # sufficient. ~/.omniroute/storage.sqlite is mutable; the sqlite
+    # corruption recovery files (`storage.sqlite.corrupt-*`) are also
+    # captured so the corruption timeline is preserved across backups.
+    /home/ubuntu/.omniroute
     # ── Ollama user state (added 2026-07-14) ──────────────────────────────
     # 28 KB total. ~/.ollama/id_ed25519 is the ollama-cloud auth key
     # (different from ~/.ssh/id_ed25519); ~/.ollama/config.json holds
@@ -402,6 +414,7 @@ PRIVILEGED_PATHS=(
     "home/ubuntu/.gnupg/sshcontrol"
     "home/ubuntu/data/code/mercury-host/inventory.yaml"
     "home/ubuntu/.config/openchamber/startup.env"
+    "home/ubuntu/.omniroute/.env"
     "home/ubuntu/data/code/x-digest/.env"
     "home/ubuntu/data/code/scriptcaster/.env"
     "home/ubuntu/.openwiki/.env"

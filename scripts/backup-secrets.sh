@@ -242,6 +242,7 @@ XD_ENV="${HOME}/data/code/x-digest/.env"
 # working. No more per-project edits required when a new repo is added.
 SC_ENV="${HOME}/data/code/scriptcaster/.env"
 OC_ENV="${HOME}/.config/openchamber/startup.env"
+OR_ENV="${HOME}/.omniroute/.env"
 ACCT_KEY="$(find /etc/letsencrypt/accounts -name account_key.json 2>/dev/null | head -1 || true)"
 PRIVKEY_LINK="/etc/letsencrypt/live/mercury.garden/privkey.pem"
 PRIVKEY_REAL="$(readlink -f "$PRIVKEY_LINK" 2>/dev/null || echo "$PRIVKEY_LINK")"
@@ -430,6 +431,14 @@ OPENVKING_OPENROUTER_KEY_VALUE="$(read_env_value "${HOME}/.hermes/.env" OPENROUT
   echo
   echo "# ── openchamber ─────────────────────────────────────────────────"
   emit_b64_block "openchamber_startup_env" "$OC_ENV" || miss "openchamber startup.env"
+  echo
+  echo "# ── omniroute ───────────────────────────────────────────────────"
+  # STORAGE_ENCRYPTION_KEY (mode 0600) — decrypts ~/.omniroute/storage.sqlite
+  # on restore. Without this key, the sqlite is unreadable; the daily state
+  # tarball ALSO captures the file (see backup-mercury-state.sh), but the
+  # secrets.yaml layer is the canonical store for the credential. Mirrors
+  # openchamber_startup_env pattern. Restored to ~/.omniroute/.env on host.
+  emit_b64_block "omniroute_env" "$OR_ENV" || miss "omniroute .env"
   echo
   echo "# ── opencode auth (provider API keys) ───────────────────────────"
   emit_b64_block "opencode_auth" "$OPENCODE_AUTH" || miss "$HOME/.local/share/opencode/auth.json"
