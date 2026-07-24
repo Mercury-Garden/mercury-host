@@ -339,7 +339,23 @@ export const pnpmInstalledVersion = (binName: string, pkgName?: string): string 
     const wanted = pkgName ?? binName
     for (const d of dirs) {
       const pj = join(globalRoot, d, 'node_modules', wanted, 'package.json')
-      if (existsSync(pj)) candidates.push(pj)
+      // lstatSync (not existsSync) so a broken relative symlink in
+      // the hash-dir's node_modules/<pkg> still appears as a candidate.
+      // existsSync FOLLOWS symlinks and returns false on broken ones,
+      // which is exactly the failure mode that hid the openchamber
+      // 1.16.2 install from the audit (`installed: null` in cron
+      // output). Captured 2026-07-14, fix shipped as part of
+      // mercury-host#98 (fix(cron): pnpm 11 + symlink helpers self-heal).
+      // If lstat returns truthy but statSync (follows) returns ENOENT,
+      // the symlink is broken — skip it; the installFresh() helper in
+      // this same file will fix the linkage on the next cron tick.
+      if (!lstatSync(pj, { throwIfNoEntry: false })) continue
+      try {
+        statSync(pj)
+      } catch {
+        continue
+      }
+      candidates.push(pj)
     }
   }
   for (const c of candidates) {
@@ -532,13 +548,113 @@ export const repointPnpmCmdShim = (binName: string, pkgPath: string): string | n
   } catch { return null }
 }
 
-// ─── Upgrade: pnpm global package (used by openchamber) ───────────────────
+// ─── Upgrade: pnpm global package (used by openchamber + omniroute + future) ─
 // `version` MUST be the explicit numeric version resolved from the npm
 // registry. Using `@latest` triggers pnpm's offline-store preference
 // (pitfall #14 Layer D) and silently resolves to the store-cached version
 // instead of the published latest.
 const pnpmGlobalUpgrade = (pkg: string, version: string): string => {
   return exec(`pnpm add -g ${pkg}@${version}`, { timeout: 240_000 })
+}
+
+// ─── Install-or-repair: pnpm-global package, self-healing on Layer B trap ─
+// Composes the proven Layer B+D recovery into a single call so every
+// audit path (openchamber, omniroute, future dev-stack entries) gets
+// the defense automatically. Captured 2026-07-24 during the omniroute
+// install: `pnpm add -g <pkg>@<version>` partial-fails on this filesystem
+// (pnpm 11.11.0 generates relative `node_modules/<pkg>` symlinks with
+// off-by-one `../` depth when the parent dir `~/.local/share` is a
+// symlink to /home/ubuntu/data/.local/share; pnpm 11 then errors on
+// `readInstalledPackages` with ENOENT before it writes the cmd-shim).
+//
+// What this does (all idempotent — safe on a healthy install):
+//   1. Pre-install symlink repair for the package under every
+//      existing hash-dir. Catches the case where a previous install
+//      left a half-broken state.
+//   2. Run `pnpm add -g <pkg>@<version>`. Pin the version explicitly
+//      to defeat the offline-store preference (Layer D).
+//   3. Unconditional post-install repair: re-walk all hash-dirs, fix
+//      any new broken relative symlinks, then repoint the cmd-shim to
+//      the canonical (newest mtime) hash-dir. This is the Layer B
+//      recovery loop from the proven manual recipe.
+//   4. Verify the cmd-shim exists. If pnpm still didn't write one
+//      (e.g. install errored at the bookkeeping step), surface a
+//      clear error so the audit reports `failed` instead of silently
+//      drifting. Caller (auditOpenchamber / auditOmniroute / future)
+//      decides what to do with the error.
+//
+// Returns the cmd-shim-target hash-dir on success, or `null` on
+// failure. Caller passes the result to pnpmInstalledVersion() for
+// the post-install truth read.
+export const pnpmInstallFresh = (pkg: string, version: string): { ok: boolean; target: string | null; stderr: string } => {
+  const binName = pkg.startsWith('@') ? pkg.split('/')[1] : pkg
+  let stderr = ''
+  // (1) Pre-install repair
+  try { repairPnpmSymlinks(binName) } catch { /* best-effort */ }
+  // (2) The install
+  try {
+    pnpmGlobalUpgrade(pkg, version)
+  } catch (e) {
+    stderr += `install: ${e instanceof Error ? e.message : String(e)}; `
+  }
+  // (3) Post-install repair
+  try { repairPnpmSymlinks(binName) } catch { /* best-effort */ }
+  let canonical: string | null = null
+  try { canonical = repointPnpmCmdShim(binName, binName) ?? null } catch { /* best-effort */ }
+  // (4) Verify the shim exists. pnpm may not write it on bookkeeping
+  // error (the omniroute install did exactly this on 2026-07-24).
+  // If absent, hand-write one mirroring the openchamber shape, with
+  // the cmd-shim-target trailer pointing at the canonical hash-dir.
+  // This is the surgical recovery: a 40-line POSIX shim that does
+  // `exec node <basedir>/../global/v11/<hash>/node_modules/<pkg>/bin/<bin>.mjs`.
+  // The shim source is the exact pattern pnpm 11's cmd-shim uses; copy
+  // it verbatim so future `repointPnpmCmdShim` calls still recognise
+  // and patch this file.
+  const shim = join(PNPM_BIN, binName)
+  if (!existsSync(shim)) {
+    if (!canonical) canonical = newestPnpmHashDir()
+    if (canonical) {
+      // The bin entry is conventionally `<pkg>/bin/<bin>.mjs` for
+      // modern pnpm-global installs. We try to discover the actual
+      // entry filename from the store entry's package.json
+      // `bin.<binName>` field; if that fails, fall back to the
+      // canonical `<pkg>.mjs` next to the package.json.
+      const hashDir = join(pnpmGlobalRoot(), canonical)
+      const pkgJsonPath = join(hashDir, 'node_modules', binName, 'package.json')
+      let entryRel: string | null = null
+      try {
+        const raw = readFileSync(pkgJsonPath, 'utf8')
+        const pj = JSON.parse(raw) as { bin?: Record<string, string> | string }
+        if (typeof pj.bin === 'string') entryRel = pj.bin
+        else if (pj.bin && typeof pj.bin === 'object') {
+          const v = pj.bin[binName] ?? Object.values(pj.bin)[0]
+          if (v) entryRel = v
+        }
+      } catch { /* fall through */ }
+      if (!entryRel) entryRel = `bin/${binName}.mjs`
+      const shimSrc = [
+        '#!/bin/sh',
+        'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+        'case `uname` in *CYGWIN*|*MINGW*|*MSYS*) basedir=`cygpath -w "$basedir"`;; esac',
+        `exec node "$basedir/../global/v11/${canonical}/node_modules/${binName}/${entryRel}" "$@"`,
+        `# cmd-shim-target=/home/ubuntu/.local/share/pnpm/global/v11/${canonical}/node_modules/${binName}/${entryRel}`,
+        '',
+      ].join('\n')
+      try {
+        writeFileSync(shim, shimSrc, { mode: 0o755 })
+        stderr += `cmd-shim hand-written; `
+      } catch (e) {
+        stderr += `cmd-shim write failed: ${e instanceof Error ? e.message : String(e)}; `
+        return { ok: false, target: null, stderr }
+      }
+    } else {
+      stderr += `no canonical hash-dir to point shim at; `
+      return { ok: false, target: null, stderr }
+    }
+  }
+  // (5) Confirm the shim now points at a hash-dir that exists
+  const ok = existsSync(shim) && newestPnpmHashDir() !== null
+  return { ok, target: canonical, stderr: stderr || '' }
 }
 
 // ─── Upgrade: mise install (handles node + global packages alike) ─────────
