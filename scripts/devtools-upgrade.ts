@@ -36,6 +36,14 @@
 //   Project service:
 //     • openchamber — @openchamber/web on npm via pnpm; restart
 //                     `openchamber.service` after any successful upgrade
+//     • omniroute   — multi-provider AI gateway + dashboard, npm-published
+//                     (installed via pnpm-global so it shares the openchamber
+//                     pool A + Layer B/D trap); restarts `omniroute.service`
+//                     after a successful upgrade. First "dev-stack" entry
+//                     (added 2026-07-24) — any future dev-stack tool with
+//                     its own systemd service should mirror the auditOmniroute
+//                     shape verbatim (explicit-version pin + post-upgrade
+//                     watchdog + health-check auto-repair).
 //
 // Cron contract: this script ALWAYS emits a JSON line per tracked tool
 // (including `action: "noop"` when installed == latest). It NEVER prints a
@@ -787,6 +795,101 @@ async function auditOpenchamber(): Promise<void> {
   }
 }
 
+// ─── Tool: omniroute (AI gateway via pnpm + systemd --user service) ─────
+// omniRoute is the multi-provider LLM router that fronts the rest of
+// the dev stack. It runs as a pnpm-global install (`npm i -g omniroute`
+// is npm-only; under pnpm 11 we use `pnpm add -g omniroute@<version>`).
+// The dashboard service binds to 127.0.0.1:20128 and is exposed publicly
+// via the omniroute.mercury.garden nginx vhost (oauth2-proxy-gated).
+//
+// This audit follows the openchamber shape verbatim (explicit-version
+// pin, unconditional symlink repair, post-upgrade service health-check +
+// auto-repair watchdog). The service is independent of openchamber, so
+// its restart does NOT cascade into openchamber. added 2026-07-24 as the
+// first "dev-stack" entry — every future dev-stack tool that ships with
+// a systemd service should copy this shape.
+const stopOmniroute = (): string => {
+  const env = { ...process.env } as NodeJS.ProcessEnv
+  try { exec(`systemctl --user stop omniroute.service`, { timeout: 30_000, env }) } catch { /* may already be stopped */ }
+  execSync('sleep 2', { encoding: 'utf8' })
+  return 'stopped'
+}
+const startOmniroute = (): string => {
+  exec(`systemctl --user start omniroute.service`, { timeout: 30_000 })
+  return 'started'
+}
+export const omnirouteHealthcheck = (): { active: boolean; subState: string; raw: string } => {
+  let raw = ''
+  try {
+    raw = exec(`systemctl --user is-active omniroute.service 2>&1 || true`, { timeout: 10_000 })
+  } catch (e) {
+    return { active: false, subState: 'unreachable', raw: e instanceof Error ? e.message : String(e) }
+  }
+  const subState = (raw || '').trim()
+  return { active: subState === 'active', subState, raw }
+}
+export const autoRepairOmniroute = (): { repaired: number; scanned: number; shimRepointed: boolean; restartOk: boolean } => {
+  // `omniroute` is unscoped; the cmd-shim repoint helper expects
+  // `pkgPath` to be the node_modules path. For unscoped global packages,
+  // the shim's references are still anchored to the package name, so
+  // pass the bare name. `repairPnpmSymlinks` walks the same hash-dirs
+  // looking for `node_modules/omniroute` entries.
+  const repaired = repairPnpmSymlinks('omniroute')
+  const canonical = repointPnpmCmdShim('omniroute', 'omniroute')
+  let restartOk = false
+  try { startOmniroute(); restartOk = true } catch { /* leave as-is */ }
+  return { repaired: repaired.repaired, scanned: repaired.scanned, shimRepointed: canonical !== null, restartOk }
+}
+async function auditOmniroute(): Promise<void> {
+  const installed = pnpmInstalledVersion('omniroute', 'omniroute')
+  const latest = await npmLatest('omniroute')
+  if (!latest) {
+    emit({ tool: 'omniroute', installed, latest, action: 'failed', old: null, new: null, duration_ms: 0, error: 'npm registry fetch failed' })
+    return
+  }
+  if (!installed || cmpVer(installed, latest) >= 0) {
+    emit({ tool: 'omniroute', installed, latest, action: 'noop', old: null, new: null, duration_ms: 0, error: null })
+    return
+  }
+  try { stopOmniroute() } catch { /* */ }
+  const pre = repairPnpmSymlinks('omniroute')
+  let after: string | null = null
+  try {
+    const r = await timed(() => Promise.resolve().then(() => pnpmGlobalUpgrade('omniroute', latest)))
+    // Unconditional post-install repair (same shape as openchamber):
+    // re-walk the symlinks, repoint the cmd-shim to the canonical
+    // install hash, then re-read the installed version.
+    try { repairPnpmSymlinks('omniroute') } catch { /* best effort */ }
+    try { repointPnpmCmdShim('omniroute', 'omniroute') } catch { /* best effort */ }
+    after = pnpmInstalledVersion('omniroute', 'omniroute')
+    // Post-upgrade classification + watchdog. Three cases (mirrors
+    // openchamber verbatim): install OK + service active → upgraded,
+    // install OK + service down → upgraded with auto-repair note,
+    // install failed + repair didn't bring it back → failed.
+    let errMsg: string | null = null
+    let action: 'upgraded' | 'failed' = 'upgraded'
+    const hc = omnirouteHealthcheck()
+    if (!hc.active && hc.subState !== 'unreachable') {
+      const repair = autoRepairOmniroute()
+      execSync('sleep 3', { encoding: 'utf8' })
+      const hc2 = omnirouteHealthcheck()
+      if (hc2.active) {
+        errMsg = `${r.err ? `install reported error but post-install repair healed it (was: ${r.err}); ` : 'auto-'}repaired: service was ${hc.subState} → now active (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})`
+      } else if (r.err) {
+        action = 'failed'
+        errMsg = `${r.err} (post-install repair did not bring service back; substate=${hc2.subState}; fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}; manual intervention required`
+      } else {
+        errMsg = `install OK but service still ${hc2.subState} after auto-repair (fixed ${repair.repaired}/${repair.scanned} symlinks${repair.shimRepointed ? ', repointed shim' : ''})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}; manual intervention required`
+      }
+    } else if (r.err && hc.active) {
+      errMsg = `install reported '${r.err}' but service is active (canonical install: ${after ?? 'unknown'})${pre.repaired > 0 ? `; pre-install also repaired ${pre.repaired}/${pre.scanned} symlinks` : ''}`
+    }
+    emit({ tool: 'omniroute', installed, latest: after ?? latest, action, old: installed, new: after, duration_ms: r.ms, error: errMsg })
+  } finally {
+    try { startOmniroute() } catch { /* */ }
+  }
+}
+
 // ─── Tool: pnpm (via corepack; declared per-project in package.json#packageManager) ─
 // The actual upgrade happens project-side via corepack. Global pnpm
 // version is recorded here for visibility only — no upgrade action
@@ -1050,6 +1153,7 @@ async function main() {
   // Then standalone npm CLIs. Then companion binaries.
   await auditOpencode()
   await auditOpenchamber()
+  await auditOmniroute()
   await auditPnpm()
   await auditNode()
   await auditMise()

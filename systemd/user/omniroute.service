@@ -1,0 +1,42 @@
+[Unit]
+Description=OmniRoute AI gateway — multi-provider LLM router + dashboard
+Documentation=https://omniroute.online
+After=network-online.target
+
+[Service]
+Type=simple
+# PATH must be set explicitly: systemd --user strips the interactive
+# PATH, and the pnpm cmd-shim at /home/ubuntu/.local/share/pnpm/bin/
+# omniroute does `exec node ...` — without node on PATH the service
+# exits 127. Mirrors the openchamber pattern: each service has a
+# startup.env (mode 0600) in ~/.config/<service>/ that sets PATH +
+# the minimum systemd-user session vars. No secrets in this file
+# (omniroute v1 has no auth — provider API keys live in the
+# dashboard's local config, mode 0600, captured by backup-secrets.sh).
+EnvironmentFile=-/home/ubuntu/.config/omniroute/startup.env
+# omniroute uses sql.js (WASM SQLite) which loads the entire storage.sqlite
+# into V8 heap. Without --max-old-space-size, default V8 heap (~2GB) is
+# insufficient — the dashboard returns HTTP 500 on every request with
+# "[DB] Out of memory while probing /home/ubuntu/.omniroute/storage.sqlite"
+# and the instrumentation hook fails with "Database closed". 4 GB is the
+# the value the app's own error message recommends; matches openchamber
+# which uses similar Next.js + better-sqlite3 sizing.
+Environment=NODE_OPTIONS=--max-old-space-size=4096
+ExecStart=/home/ubuntu/.local/share/pnpm/bin/omniroute serve --port 20128 --no-open
+WorkingDirectory=/home/ubuntu
+# Loopback bind only — external access is via the omniroute.mercury.garden
+# nginx vhost, which fronts it with oauth2-proxy (single-sign-on with the
+# rest of the Mercury Garden). Direct port exposure is intentionally not
+# enabled.
+Restart=always
+RestartSec=5
+# Hardening for a user-mode service: read-only /tmp + no new privs +
+# read-only system. No `ProtectHome=` — user services need HOME writable
+# (omniroute writes its SQLite store under ~/.omniroute/, which fails
+# with HTTP 500 on every request if read-only). The openchamber unit
+# is the canonical pattern: same flags, no ProtectHome.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=full
+[Install]
+WantedBy=default.target

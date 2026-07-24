@@ -15,14 +15,16 @@
 #
 # What this cron does (see scripts/devtools-upgrade-prompt.txt and the
 # devtools-upgrade-plan skill for full architecture context):
-#   Daily at 06:00 America/Bogota (11:00 UTC): audit 13 dev tools
-#   (opencode-ai, openchamber, pnpm, node, five opencode plugins,
-#   openwiki, rtk, plannotator, codegraph) against their latest releases.
-#   Note: volta was on this list through 2026-07-18; removed when the
-#   toolchain migrated to mise (Phase 1–4). Apply upgrades; on
+#   Daily at 06:00 America/Bogota (11:00 UTC): audit 15 dev tools
+#   (opencode-ai, openchamber, omniroute, pnpm, node, mise, five opencode
+#   plugins, openwiki, rtk, plannotator, codegraph) against their latest
+#   releases. Note: volta was on this list through 2026-07-18; removed when
+#   the toolchain migrated to mise (Phase 1–4). Apply upgrades; on
 #   opencode-ai/openchamber, stop+start openchamber.service around the
-#   install (its opencode-gate subprocess holds the on-disk binary). Post
-#   a deterministic Discord message to <#1520253382630047865>.
+#   install (its opencode-gate subprocess holds the on-disk binary); on
+#   omniroute, stop+start omniroute.service (it independently hosts its
+#   own dashboard binary). Post a deterministic Discord message to
+#   <#1520253382630047865>.
 #
 # Delivery target (channel id 1520253382630047865) is hard-coded here on
 # purpose — it's the only place this cron posts. If you ever move it,
