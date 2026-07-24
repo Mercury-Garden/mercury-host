@@ -163,6 +163,46 @@ else
   FAIL=$((FAIL+1))
 fi
 
+echo "=== Assertion 6: reanchorOrphanShims re-attaches a broken shim ==="
+# Simulate the exact production failure: rewrite the omniroute
+# shim to point at a non-existent hash-dir, then call
+# reanchorOrphanShims and assert the shim now points at a real
+# path. Captured 2026-07-24: the openchamber install GC'd the
+# omniroute hash-dir; the shim still existed but its target was
+# gone. This assertion proves the fix.
+OMNI_SHIM_BACKUP=$(mktemp)
+cp "$OMNI_SHIM" "$OMNI_SHIM_BACKUP"
+# Break the shim: point it at a hash-dir that doesn't exist.
+# Use a synthetic hash-dir name that mimics pnpm's format.
+sed -i 's|7131-19f9226c755-2644f4e6d195790e|deadbeef-deadbeef-deadbeef-deadbeefdeadbeef|g' "$OMNI_SHIM"
+BROKEN_TARGET=$(grep -oE '/global/v11/deadbeef-[a-f0-9-]+' "$OMNI_SHIM" | head -1)
+echo "  broke the shim to point at: $BROKEN_TARGET"
+# Confirm it's actually broken
+BROKEN_OUT=$("$OMNI_SHIM" --version 2>&1 | head -1)
+if echo "$BROKEN_OUT" | grep -q 'MODULE_NOT_FOUND\|Error'; then
+  echo "  confirmed shim is broken (MODULE_NOT_FOUND)"
+else
+  echo "  WARNING: shim didn't break as expected (output: $BROKEN_OUT)"
+fi
+# Now call the helper
+REANCHOR_OUT=$("$NODE_BIN" --experimental-strip-types -e '
+import("/home/ubuntu/.hermes/scripts/devtools-upgrade.ts").then(m => {
+  console.log(JSON.stringify(m.reanchorOrphanShims("openchamber")));
+});
+' 2>&1 | grep -E '^\{')
+echo "  reanchorOrphanShims(skipBin=openchamber) result: $REANCHOR_OUT"
+# Restore the shim from backup, then verify the helper's re-anchor
+# produced a working shim.
+if [ -f "$OMNI_SHIM_BACKUP" ]; then rm "$OMNI_SHIM_BACKUP"; fi
+FIXED_OUT=$("$OMNI_SHIM" --version 2>&1 | tail -1)
+if [ "$FIXED_OUT" = "3.8.48" ]; then
+  echo "  PASS: reanchorOrphanShims fixed the broken shim (--version now returns 3.8.48)"
+  PASS=$((PASS+1))
+else
+  echo "  FAIL: shim still broken after reanchorOrphanShims (output: $FIXED_OUT)"
+  FAIL=$((FAIL+1))
+fi
+
 echo
 echo "======================================="
 echo "Result: $PASS pass / $FAIL fail"

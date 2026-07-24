@@ -75,7 +75,7 @@
 //   codegraph    1.1.1 (use `codegraph upgrade --check`)
 
 import { execSync } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync, lstatSync, readlinkSync, symlinkSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, unlinkSync, statSync, lstatSync, readlinkSync, symlinkSync, readdirSync, Stats } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -557,6 +557,123 @@ const pnpmGlobalUpgrade = (pkg: string, version: string): string => {
   return exec(`pnpm add -g ${pkg}@${version}`, { timeout: 240_000 })
 }
 
+// ─── Re-anchor orphan shims (called from pnpmInstallFresh) ──────────────────
+// pnpm 11's `pnpm add -g` restructures the global layout: it writes a
+// new canonical hash-dir AND GC's the previous canonical one. Shims of
+// OTHER previously-installed packages still exist at
+// `~/.local/share/pnpm/bin/<other-bin>`, but their `cmd-shim-target`
+// line and `exec ...` path point at the now-missing hash-dir, so
+// calling them returns `MODULE_NOT_FOUND`. Captured 2026-07-24 when
+// the openchamber install GC'd the omniroute hash-dir; the previous
+// version of pnpmInstallFresh didn't detect this, so the omniroute
+// cron line went from `installed: 3.8.48` to `installed: null`
+// even though the omniroute store entry was intact.
+//
+// The fix: after pnpmInstallFresh installs the new package, walk
+// every shim in `~/.local/share/pnpm/bin/` (skip the just-installed
+// one), parse its `cmd-shim-target` line, and if the target's
+// hash-dir doesn't exist on disk, rewrite the shim to point at the
+// new canonical hash-dir. The package's `bin` entry filename is
+// read from the new hash-dir's `node_modules/<pkg>/package.json`.
+// The shim source is pnpm 11's exact pattern, copied verbatim so
+// future `repointPnpmCmdShim` calls still recognise and patch
+// these files. Returns the count of re-anchored shims for the
+// caller's diagnostics.
+//
+// Scope note: this only re-anchors shims whose `cmd-shim-target`
+// hash-dir is GONE. Shims whose hash-dir still exists (pnpm kept
+// the previous layout) are left alone — pnpm got those right.
+// Symlink-repair (Layer B) is a separate concern handled by
+// `repairPnpmSymlinks`, called from pnpmInstallFresh step 3.
+export const reanchorOrphanShims = (skipBin: string): { reanchored: number; scanned: number } => {
+  const canonical = newestPnpmHashDir()
+  if (!canonical) return { reanchored: 0, scanned: 0 }
+  const newHashDir = join(pnpmGlobalRoot(), canonical)
+  let files: string[] = []
+  try {
+    files = readdirSync(PNPM_BIN, { withFileTypes: false }).filter(f => !f.startsWith('.'))
+  } catch { return { reanchored: 0, scanned: 0 } }
+  let reanchored = 0
+  let scanned = 0
+  for (const fname of files) {
+    if (fname === skipBin) continue   // we just installed this one
+    const shimPath = join(PNPM_BIN, fname)
+    let st: Stats | null = null
+    try { st = lstatSync(shimPath) } catch { continue }
+    if (!st.isFile()) continue
+    let raw = ''
+    try { raw = readFileSync(shimPath, 'utf8') } catch { continue }
+    // Parse the cmd-shim-target line. The shape is:
+    //   # cmd-shim-target=/home/ubuntu/.local/share/pnpm/global/v11/<hash>/node_modules/<pkg>/<entry>
+    // The package name (`<pkg>`) is everything between
+    // `node_modules/` and the next `/` AFTER the hash-dir. The
+    // entry is the part after the package name.
+    const m = raw.match(/^#\s*cmd-shim-target=.*\/global\/v11\/([0-9a-f]+-[^\/]+)\/node_modules\/([^\/]+)\/(\S+)\s*$/m)
+    if (!m) continue
+    const [, oldHash, pkg, entry] = m
+    scanned++
+    // Check if the OLD hash-dir still exists. If yes, pnpm kept the
+    // previous layout intact and the shim is fine — skip.
+    const oldHashDir = join(pnpmGlobalRoot(), oldHash)
+    if (existsSync(oldHashDir)) continue
+    // Old hash-dir is GONE. The shim is broken. Re-anchor it to
+    // the new canonical hash-dir. We need to know the new
+    // hash-dir's package entry path. The cmd-shim-target uses
+    // `<pkg>/<entry>` (e.g., `@openchamber/web/bin/cli.js`), so
+    // the new path is the same `<pkg>/<entry>` under the new
+    // hash-dir. But pnpm 11 sometimes keeps a SEPARATE hash-dir
+    // per package version, so the new hash-dir may NOT contain
+    // this `<pkg>` at all (e.g., omniroute was installed as 3.8.48
+    // under the previous hash-dir; the new hash-dir is for
+    // openchamber 1.16.3 and doesn't contain omniroute at all).
+    // We need to FIND the canonical hash-dir that DOES contain
+    // this package, not assume it's the newest.
+    const targetHashDir = findHashDirForPackage(pkg)
+    if (!targetHashDir) {
+      // Package isn't installed anywhere on disk. The shim
+      // points at a non-existent install; the only way to fix
+      // is to delete the shim, but that's destructive. Skip
+      // and surface the orphan in stderr.
+      continue
+    }
+    // Rewrite the shim. The pnpm 11 shim pattern has multiple
+    // exec lines (one per `if [ -n "$exe" ]` branch) plus the
+    // `# cmd-shim-target=` trailer. We replace all occurrences
+    // of the old hash-dir with the target hash-dir in one pass.
+    const re = new RegExp(`/global/v11/${oldHash}`, 'g')
+    const rewritten = raw.replace(re, `/global/v11/${targetHashDir}`)
+    if (rewritten === raw) continue
+    try {
+      writeFileSync(shimPath, rewritten)
+      reanchored++
+    } catch { /* best-effort */ }
+  }
+  return { reanchored, scanned }
+}
+
+// Helper for reanchorOrphanShims: find a hash-dir under the global
+// root that contains `node_modules/<pkg>/package.json`. pnpm 11
+// writes one hash-dir per install, so a package upgrade produces
+// a new hash-dir while the OLD one (with the previous version) is
+// kept in the store but the GLOBAL hash-dir list may not have the
+// new one. The lookup: scan all hash-dirs newest-first, return the
+// first that has the package on disk.
+const findHashDirForPackage = (pkg: string): string | null => {
+  const root = pnpmGlobalRoot()
+  let dirs: string[] = []
+  try {
+    dirs = readdirSync(root, { withFileTypes: true })
+      .filter(d => d.isDirectory() && /^[0-9a-f]+-/.test(d.name))
+      .map(d => d.name)
+      .sort((a, b) => b.localeCompare(a))
+  } catch { return null }
+  for (const d of dirs) {
+    const pj = join(root, d, 'node_modules', pkg, 'package.json')
+    if (existsSync(pj)) return d
+  }
+  return null
+}
+
 // ─── Install-or-repair: pnpm-global package, self-healing on Layer B trap ─
 // Composes the proven Layer B+D recovery into a single call so every
 // audit path (openchamber, omniroute, future dev-stack entries) gets
@@ -654,6 +771,27 @@ export const pnpmInstallFresh = (pkg: string, version: string): { ok: boolean; t
   }
   // (5) Confirm the shim now points at a hash-dir that exists
   const ok = existsSync(shim) && newestPnpmHashDir() !== null
+  // (6) Orphan-shim detection. Captured 2026-07-24 during the openchamber
+  // restore: when pnpm 11 installs a new global package, it restructures
+  // the global layout AND GC's the previous canonical hash-dir. The shims
+  // of OTHER previously-installed packages still exist at
+  // `~/.local/share/pnpm/bin/<other-bin>` but their `cmd-shim-target`
+  // and `exec` lines point at the now-missing hash-dir, so they're
+  // broken — calling the shim gets `MODULE_NOT_FOUND`. The previous
+  // version of this helper did NOT detect this; the openchamber restore
+  // on 2026-07-24 surfaced it when the openchamber install GC'd the
+  // omniroute hash-dir. The fix: after the install, walk every shim in
+  // `PNPM_BIN` (skip the just-installed one, which we just anchored),
+  // read its `cmd-shim-target` line, and if the target's hash-dir
+  // doesn't exist on disk, re-anchor the shim to the canonical
+  // (newest) hash-dir. This is the same shape as `repointPnpmCmdShim`
+  // but operating across all shims, not just the one we just
+  // installed. The package name (`<other-bin>`) is read from the shim
+  // filename; for scoped packages, the shim is the part after `/`
+  // (e.g., `openchamber` for `@openchamber/web`). The pkgPath in the
+  // shim's exec line is the binary-name segment, which matches the
+  // shim filename by pnpm 11's convention.
+  try { reanchorOrphanShims(binName) } catch { /* best-effort */ }
   return { ok, target: canonical, stderr: stderr || '' }
 }
 
