@@ -388,6 +388,13 @@ state_backup:
     - date: "2026-07-08"
       reason: "system-level unit Persistent=true catch-up race; user-level unit installed next day as workaround"
       resolved_by: "user-level unit now owns the schedule"
+    - date: "2026-07-22"
+      reason: >-
+        backup-mercury-state.sh exited 2 (manifest failure) before producing a
+        tarball; secrets backup ExecStartPre succeeded but state tarball never
+        written. See journalctl --user -u mercury-state-backup for 2026-07-22
+        08:00:51 UTC.
+      resolved_by: "next-day run (Jul 23) succeeded; root cause not fully diagnosed but suspected intermittent path/permissions issue; not yet a PR"
   # ── Intentional excludes from the daily tarball ────────────────────────────
   # The `BACKUP_PATHS` list in scripts/backup-mercury-state.sh enumerates
   # what IS captured. This block enumerates what is INTENTIONALLY NOT
