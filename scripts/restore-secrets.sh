@@ -31,7 +31,9 @@
 #   opencode    ~/.local/share/opencode/auth.json
 #   gogcli      ~/.config/gogcli/credentials.json + keyring/  (keyring as tar.gz)
 #   openwiki    ~/.openwiki/.env                                (MiniMax coding-plan key for openwiki)
-#   openviking  ~/.openviking/.minimax-key + ~/.openviking/ov.conf (MiniMax key for OpenViking embed + VLM)
+#   openviking  ~/.openviking/ov.conf + OPENROUTER_API_KEY in ~/.hermes/.env (live provider)
+#               Also restores legacy ~/.openviking/.minimax-key if present in the backup
+#               (kept for 7-day rollback window after the 2026-07-24 OpenRouter migration).
 #   varlock-pass  ~/.password-store/ (encrypted pass tree) + ~/.gnupg/private-keys-v1.d/ (GPG private key).
 #                Single include kind covers both — both dirs are needed for
 #                the encrypted store to be usable after a restore.
@@ -546,8 +548,9 @@ PYEOF
     echo "  openwiki:   ~/.openwiki/.env  (mode 0600, MiniMax coding-plan API key)"
   fi
   if in_include openviking; then
-    echo "  openviking: ~/.openviking/.minimax-key + ~/.openviking/ov.conf  (mode 0600 each)"
-    echo "              contains the MiniMax API key used by OpenViking for embedding + VLM"
+    echo "  openviking: ~/.openviking/ov.conf                         (mode 0600, uses ${OPENROUTER_API_KEY})"
+    echo "              OPENROUTER_API_KEY line in ~/.hermes/.env      (append or replace)"
+    echo "              legacy ~/.openviking/.minimax-key (if present) (mode 0600, rollback)"
   fi
   echo
   exit 0
@@ -891,25 +894,72 @@ if in_include openwiki; then
   fi
 fi
 
-# ── openviking (~/.openviking/.minimax-key + ~/.openviking/ov.conf) ─────
-# Restores both the standalone key file (used by systemd EnvironmentFile=)
-# AND ov.conf (which contains the same key inline because OpenViking's
-# config schema does not support env-var substitution in api_key fields).
-# After restore, systemctl --user restart openviking-server picks them up.
+# ── openviking (~/.openviking/ov.conf + OPENROUTER_API_KEY in ~/.hermes/.env) ─────
+# Restores the config file (which uses ${OPENROUTER_API_KEY} env-var
+# substitution) AND the OpenRouter API key into ~/.hermes/.env (appending
+# the OPENROUTER_API_KEY=... line if missing, replacing if present). The
+# legacy .minimax-key file is also restored if present in the backup
+# (kept for the 7-day rollback window after the 2026-07-24 migration).
+# After restore, `kill -HUP` does NOT make OpenViking re-read config;
+# `systemctl --user restart openviking-server` is required.
 if in_include openviking; then
   note "restoring openviking config..."
   OV_DIR="${HOME}/.openviking"
   mkdir -p "$OV_DIR"
   chmod 700 "$OV_DIR"
+  # Legacy key (kept for rollback; not read by OpenViking post-migration).
   if decode_b64_block "openviking_minimax_api_key" "$OV_DIR/.minimax-key" 0600; then
-    ok "openviking_minimax_api_key"
+    ok "openviking_minimax_api_key (legacy rollback key)"
   else
-    warn "openviking_minimax_api_key: SKIPPED (null in source)"
+    note "openviking_minimax_api_key: null in source (skipping — no legacy key in backup)"
   fi
+  # ov.conf itself (mode 0600; uses ${OPENROUTER_API_KEY} substitution).
   if decode_b64_block "openviking_ov_conf" "$OV_DIR/ov.conf" 0600; then
     ok "openviking_ov_conf"
   else
     warn "openviking_ov_conf: SKIPPED (null in source)"
+  fi
+  # Live OpenRouter key: write into ~/.hermes/.env as OPENROUTER_API_KEY=...
+  # Append if missing, replace in place if present. Never touch other lines.
+  if grep -q '^openviking_openrouter_api_key: "' "$SRC"; then
+    OPENROUTER_VAL=$(python3 -c "
+import re, pathlib
+text = pathlib.Path('$SRC').read_text()
+m = re.search(r'^openviking_openrouter_api_key:\s*\"(.*)\"\s*\$', text, re.MULTILINE)
+if m: print(m.group(1).replace('\\\\\\\\', '\x00').replace('\\\\\"', '\"').replace('\x00', '\\\\'))
+")
+    if [ -n "$OPENROUTER_VAL" ]; then
+      HERMES_ENV="${HOME}/.hermes/.env"
+      mkdir -p "${HOME}/.hermes"
+      chmod 700 "${HOME}/.hermes"
+      if [ -f "$HERMES_ENV" ]; then
+        chmod 600 "$HERMES_ENV"
+        if grep -q '^OPENROUTER_API_KEY=' "$HERMES_ENV"; then
+          python3 - "$HERMES_ENV" "$OPENROUTER_VAL" <<'PYEOF'
+import os, pathlib, re, sys
+env_path, new_val = sys.argv[1], sys.argv[2]
+text = pathlib.Path(env_path).read_text()
+escaped = new_val.replace('\\', '\\\\').replace('"', '\\"')
+text = re.sub(r'^OPENROUTER_API_KEY=.*$', f'OPENROUTER_API_KEY="{escaped}"', text, count=1, flags=re.MULTILINE)
+pathlib.Path(env_path).write_text(text)
+os.chmod(env_path, 0o600)
+PYEOF
+          ok "OPENROUTER_API_KEY replaced in $HERMES_ENV"
+        else
+          printf 'OPENROUTER_API_KEY="%s"\n' "$OPENROUTER_VAL" >> "$HERMES_ENV"
+          chmod 600 "$HERMES_ENV"
+          ok "OPENROUTER_API_KEY appended to $HERMES_ENV"
+        fi
+      else
+        printf 'OPENROUTER_API_KEY="%s"\n' "$OPENROUTER_VAL" > "$HERMES_ENV"
+        chmod 600 "$HERMES_ENV"
+        ok "OPENROUTER_API_KEY written to new $HERMES_ENV"
+      fi
+    else
+      warn "openviking_openrouter_api_key: empty value in source — skipping write"
+    fi
+  else
+    note "openviking_openrouter_api_key: not present in source (skipping write)"
   fi
 fi
 

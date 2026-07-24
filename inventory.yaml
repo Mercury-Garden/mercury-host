@@ -40,7 +40,7 @@ services:
       scopes_needed: "bot + Send Messages + Read Message History + Embed Links"
       profile_dir: "~/.hermes/profiles/mercury-butler (not tracked; lives under HERMES_HOME)"
 
-  # ── OpenViking context database (added 2026-07-19) ───────────────────────
+  # ── OpenViking context database (added 2026-07-19, providers migrated 2026-07-24) ─────
   - id: openviking-server
     kind: systemd-user
     unit: systemd/user/openviking-server.service
@@ -50,12 +50,33 @@ services:
     description: "OpenViking context database — filesystem-style agent memory, vector retrieval, peer-scoped namespaces per Hermes profile"
     repo: "pip-installed openviking 0.4.10 in the Hermes venv"
     managed_by: mercutio
+    model_providers:
+      # Both blocks use provider=openai + api_base=https://openrouter.ai/api/v1.
+      # Auth via ${OPENROUTER_API_KEY} env var (sourced from ~/.hermes/.env);
+      # the inline key shape in ov.conf is intentional and is read at server
+      # startup. See scripts/backup-secrets.sh → openviking_openrouter_api_key.
+      embedding:
+        provider: openai
+        model: qwen/qwen3-embedding-8b
+        dimension: 4096
+        api_base: https://openrouter.ai/api/v1
+        max_concurrent: 4
+        max_input_tokens: 4096
+        text_source: content_only
+      vlm:
+        provider: openai
+        model: qwen/qwen3.5-flash-02-23
+        api_base: https://openrouter.ai/api/v1
+        max_concurrent: 8
+        modalities: text+image+video-in,text-out
     note: |
       Auth model: dev/local-trusted mode (auth_mode reported as 'dev' in
       /health). No server-side API key; trust boundary is the host's
       loopback bind + nginx oauth2-proxy gating memory.mercury.garden.
       Peer-scoped namespaces per Hermes profile (OPENVIKING_AGENT env var).
       Config: ~/.openviking/ov.conf (mode 0600). Workspace: ~/data/openviking_ws/.
+      Hermes gateway primary LLM still uses MiniMax direct (separate subsystem;
+      this OpenRouter config is OpenViking-only).
 
   - id: hermes-dashboard
     kind: systemd-system
