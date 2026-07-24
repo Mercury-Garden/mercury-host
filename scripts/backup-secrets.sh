@@ -23,7 +23,8 @@
 #   opencode-auth                 ~/.local/share/opencode/auth.json     (added 2026-06-30)
 #   gogcli                        ~/.config/gogcli/credentials.json + keyring/  (added 2026-06-30)
 #   openwiki                      ~/.openwiki/.env                       (added 2026-07-08)
-#   openviking                    ~/.openviking/.minimax-key + ov.conf   (added 2026-07-19)
+#   openviking                    ~/.openviking/.minimax-key (DEPRECATED) + ov.conf + OPENROUTER_API_KEY from ~/.hermes/.env
+#                                (migration 2026-07-24; minimax key kept for rollback, OpenRouter key is live)
 #
 # Auto-discovered (added 2026-07-07):
 #   code_env_<sanitized-path>     EVERY `.env*` file under ~/data/code/, except
@@ -259,12 +260,20 @@ GOGCLI_KEYRING_DIR="${HOME}/.config/gogcli/keyring"
 # NOT backed up — it rebuilds on the next openwiki run and is ~130MB.
 OPENWIKI_ENV="${HOME}/.openwiki/.env"
 
-# OpenViking (agent context database, added 2026-07-19). The MiniMax API key
-# is referenced as both a standalone key file (EnvironmentFile= source for
-# the systemd unit) AND inline in ov.conf (which OpenViking's config schema
-# requires — see secrets/inventory.yaml). Back up both for full restore.
+# OpenViking (agent context database, added 2026-07-19; OpenRouter
+# migration 2026-07-24). The MiniMax API key was originally referenced as
+# both a standalone key file (EnvironmentFile= source for the systemd
+# unit) AND inline in ov.conf. As of 2026-07-24, ov.conf is OpenRouter-
+# anchored (provider=openai, api_base=https://openrouter.ai/api/v1) with
+# api_key="${OPENROUTER_API_KEY}" substitution. We capture:
+#   * openviking_minimax_api_key      — legacy .minimax-key (mode 0600) for rollback
+#   * openviking_openrouter_api_key   — scalar sourced from OPENROUTER_API_KEY
+#                                       in ~/.hermes/.env (the live key)
+#   * openviking_ov_conf              — the config file itself, for fresh-host
+#                                       restore parity
 OPENVKING_MINIMAX_KEY="${HOME}/.openviking/.minimax-key"
 OPENVKING_OV_CONF="${HOME}/.openviking/ov.conf"
+OPENVKING_OPENROUTER_KEY_VALUE="$(read_env_value "${HOME}/.hermes/.env" OPENROUTER_API_KEY || true)"
 
 # Build the YAML
 {
@@ -437,11 +446,19 @@ OPENVKING_OV_CONF="${HOME}/.openviking/ov.conf"
   # `cd <repo> && openwiki --update` run without re-init.
   emit_b64_block "openwiki_env" "$OPENWIKI_ENV" || miss "$HOME/.openwiki/.env"
   echo
-  # ── openviking (agent context database — added 2026-07-19) ────────
-  # Captures both the standalone key file and ov.conf (which contains the
-  # same key inline because OpenViking's config schema does not support
-  # env-var substitution in api_key fields). Both files are mode 0600.
-  emit_b64_block "openviking_minimax_api_key" "$OPENVKING_MINIMAX_KEY" || miss "$HOME/.openviking/.minimax-key"
+  # ── openviking (agent context database — added 2026-07-19, OpenRouter migration 2026-07-24) ──
+  # Captures both the legacy standalone key file (kept for rollback; not
+  # read by OpenViking post-migration) and the live OpenRouter key sourced
+  # from OPENROUTER_API_KEY in ~/.hermes/.env. Also captures the config
+  # file (mode 0600) for fresh-host restore parity.
+  emit_b64_block "openviking_minimax_api_key" "$OPENVKING_MINIMAX_KEY" || note "$OPENVKING_MINIMAX_KEY (missing — legacy key never created or already removed)"
+  if [ -n "$OPENVKING_OPENROUTER_KEY_VALUE" ]; then
+    emit_scalar_inline "openviking_openrouter_api_key" "$OPENVKING_OPENROUTER_KEY_VALUE"
+    ok "openviking_openrouter_api_key (from ~/.hermes/.env OPENROUTER_API_KEY)"
+  else
+    echo "openviking_openrouter_api_key: null"
+    miss "OPENROUTER_API_KEY in ~/.hermes/.env"
+  fi
   emit_b64_block "openviking_ov_conf" "$OPENVKING_OV_CONF" || miss "$HOME/.openviking/ov.conf"
   echo
   # ── Varlock pass store + GPG private key (added 2026-07-20, Stage 3) ──

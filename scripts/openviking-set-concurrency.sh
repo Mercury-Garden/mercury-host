@@ -5,6 +5,12 @@
 # Plan §8.3: "embedding.max_concurrent: 4, vlm.max_concurrent: 8. Lower to 1
 # if a misbehaving cron spikes cost."
 #
+# OpenViking provider selection (embedding + VLM models, base URL, API key)
+# is set in ~/.openviking/ov.conf and is NOT edited by this script. As of
+# 2026-07-24 the live config uses provider=openai + api_base=
+# https://openrouter.ai/api/v1 + api_key="${OPENROUTER_API_KEY}" env-var
+# substitution. This script only edits the two max_concurrent ceilings.
+#
 # This script edits ~/.openviking/ov.conf in place and reloads openviking-server.
 # `kill -HUP` does NOT make OpenViking re-read config; we must fully restart.
 #
