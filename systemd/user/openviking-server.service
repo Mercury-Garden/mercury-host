@@ -7,8 +7,17 @@ Wants=network-online.target
 Type=simple
 Environment=OPENVIKING_CONFIG_FILE=%h/.openviking/ov.conf
 EnvironmentFile=%h/.openviking/.minimax-key
-ExecStart=/home/ubuntu/.hermes/hermes-agent/venv/bin/openviking-server
-WorkingDirectory=/home/ubuntu
+# OpenRouter API key lives in ~/.hermes/.env, which is NOT sourced by the
+# systemd unit's EnvironmentFile= (that file only carries OpenViking-specific
+# keys). We materialize a single-key tempfile via the prepare script before
+# ExecStart, then consume it as the second EnvironmentFile. This keeps
+# the env-as-secrets discipline (no key value in the unit file) while
+# giving the OpenViking process the OPENROUTER_API_KEY it needs for the
+# ${OPENROUTER_API_KEY} substitution in ov.conf.
+ExecStartPre=%h/.openviking/openviking-prepare-openrouter-env.sh
+EnvironmentFile=%h/.openviking/.openrouter-env
+ExecStart=%h/.hermes/hermes-agent/venv/bin/openviking-server
+WorkingDirectory=%h
 Restart=always
 RestartSec=5
 StandardOutput=journal
