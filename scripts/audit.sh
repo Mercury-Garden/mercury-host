@@ -221,7 +221,7 @@ PYEOF
 # expect them to be in our tracked unit files.
 echo
 echo "[systemd-user]"
-for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber obscura-mcp session-migration openviking-server; do
+for svc in hermes-gateway mercury-tasks oauth2-proxy openchamber obscura-mcp session-migration openviking-server omniroute; do
   if systemctl --user is-enabled "$svc" >/dev/null 2>&1; then
     ok "$svc enabled (user)"
   else
@@ -263,6 +263,11 @@ declare -a ACTIVE_SERVICES=(
   "system:cron"
   "system:hermes-dashboard"
   "user:openviking-server"
+  # omniroute is the multi-provider LLM router that fronts the dev
+  # stack; runs under systemd-user. Added 2026-07-24 (PR #105) so a
+  # silent multi-day outage surfaces here the same way the
+  # hermes-dashboard 4-day outage did in 2026-07-05.
+  "user:omniroute"
 )
 for entry in "${ACTIVE_SERVICES[@]}"; do
   kind="${entry%%:*}"
@@ -344,7 +349,7 @@ fi
 # Use -e (any exists) instead of -L (only symlink).
 echo
 echo "[nginx]"
-for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden hermes.mercury.garden memory.mercury.garden; do
+for vhost in mercury.garden tasks.mercury.garden chamber.mercury.garden dev.mercury.garden plans.mercury.garden webhook.mercury.garden hermes.mercury.garden memory.mercury.garden omniroute.mercury.garden; do
   if [ -e "/etc/nginx/sites-enabled/$vhost" ]; then
     if [ -L "/etc/nginx/sites-enabled/$vhost" ]; then
       ok "$vhost enabled (symlink)"
@@ -522,6 +527,12 @@ PE_DRIFT=0
 STATIC_PROJECT_ENVS=(
   "mercury-tasks:${HOME}/.config/mercury-tasks/tokens.json"
   "openchamber:${HOME}/.config/openchamber/startup.env"
+  # omniroute started up as a dev-stack entry on 2026-07-23; this is
+  # the runtime secret (STORAGE_ENCRYPTION_KEY) that decrypts the
+  # sqlite on restore. Without it the captured state tarball is
+  # silently unreadable. Added 2026-07-24 (PR #103 + #105). Twin
+  # source of truth with secrets/inventory.yaml#omniroute-env.
+  "omniroute:${HOME}/.omniroute/.env"
 )
 for entry in "${STATIC_PROJECT_ENVS[@]}"; do
   label="${entry%%:*}"
@@ -574,6 +585,94 @@ else
   echo "  ($CODE_ROOT not present — skipping auto-discovered .env checks)"
 fi
 DRIFT=$((DRIFT + PE_DRIFT))
+
+# ── 9b. OmniRoute runtime state (added 2026-07-24, PR #105) ───────────────
+# Closes the silent-data-loss hole: storage.sqlite is mutable, and a
+# frozen sqlite means the dashboard is dead-but-reports-healthy. Three
+# checks:
+#   1. ~/.omniroute/.env exists + mode 0600 (the .env is also captured
+#      by backup-mercury-state.sh + backup-secrets.sh — twin of
+#      secrets/inventory.yaml#omniroute-env). Same drift class as
+#      [project_env] but listed here so the omniroute cluster reads
+#      together.
+#   2. ~/.omniroute/storage.sqlite exists + was modified in the last
+#      48h. A frozen sqlite = the dashboard stopped writing, which
+#      means either the service died (covered by [active-services])
+#      OR something stalled the request loop. Catching it here keeps
+#      the "service alive but data stale" failure mode loud.
+#   3. Any storage.sqlite.corrupt-* sibling exists. These are the
+#      sqlite corruption snapshots the runtime takes before swapping
+#      in a fresh DB; their presence in the last 7 days means the
+#      database has crashed at least once. Not a drift hard-fail, but
+#      a `note` so it's visible in the audit output.
+echo
+echo "[omniroute-state]"
+OR_DRIFT=0
+OR_ENV_FILE="${HOME}/.omniroute/.env"
+OR_SQLITE_FILE="${HOME}/.omniroute/storage.sqlite"
+# Configurable via `omniroute_state.max_age_hours`; absent = 48.
+OR_MAX_AGE_HOURS=48
+# Scope the read to a `omniroute_state:` block in inventory.yaml so the
+# regex can't accidentally pick up `state_backup.max_age_hours` (the
+# first `max_age_hours:` line in the file). The block is optional; if
+# absent, the 48h default is used.
+m_or_hours=$(python3 - "$INV" <<'PYEOF' 2>/dev/null || true
+import re, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        text = f.read()
+except Exception:
+    sys.exit(0)
+# Anchor on a `omniroute_state:` line and read max_age_hours within
+# the same indentation block.
+m = re.search(r'^omniroute_state:\s*\n((?:[ \t]+[^\n]*\n)*)', text, re.MULTILINE)
+if not m:
+    sys.exit(0)
+block = m.group(1)
+m2 = re.search(r'^\s+max_age_hours:\s*(\d+)', block, re.MULTILINE)
+if m2:
+    print(m2.group(1))
+PYEOF
+)
+if [ -n "${m_or_hours:-}" ]; then
+  OR_MAX_AGE_HOURS="$m_or_hours"
+fi
+# Check 1: .env mode 0600
+if [ -f "$OR_ENV_FILE" ]; then
+  env_mode=$(stat -c '%a' "$OR_ENV_FILE" 2>/dev/null || echo 0)
+  if [ "$env_mode" = "600" ]; then
+    ok "$OR_ENV_FILE: present, mode 0600"
+  else
+    drift "$OR_ENV_FILE: mode $env_mode (want 600) — STORAGE_ENCRYPTION_KEY world-readable"
+    OR_DRIFT=$((OR_DRIFT + 1))
+  fi
+else
+  drift "$OR_ENV_FILE: MISSING — captured storage.sqlite is undecryptable on restore"
+  OR_DRIFT=$((OR_DRIFT + 1))
+fi
+# Check 2: storage.sqlite freshness
+if [ -f "$OR_SQLITE_FILE" ]; then
+  sqlite_mtime_epoch=$(stat -c '%Y' "$OR_SQLITE_FILE" 2>/dev/null || echo 0)
+  now_epoch=$(date +%s)
+  age_seconds=$(( now_epoch - sqlite_mtime_epoch ))
+  age_hours=$(( age_seconds / 3600 ))
+  if [ "$age_hours" -le "$OR_MAX_AGE_HOURS" ]; then
+    ok "$OR_SQLITE_FILE: fresh (${age_hours}h old, max ${OR_MAX_AGE_HOURS}h)"
+  else
+    drift "$OR_SQLITE_FILE: STALE (${age_hours}h old, max ${OR_MAX_AGE_HOURS}h) — request loop likely stalled"
+    OR_DRIFT=$((OR_DRIFT + 1))
+  fi
+else
+  drift "$OR_SQLITE_FILE: MISSING — service may have been wiped or never started cleanly"
+  OR_DRIFT=$((OR_DRIFT + 1))
+fi
+# Check 3: sqlite corruption recovery files in last 7 days (advisory only)
+corrupt_count=$(find "${HOME}/.omniroute" -maxdepth 1 -name 'storage.sqlite.corrupt-*' -mtime -7 2>/dev/null | wc -l)
+if [ "$corrupt_count" -gt 0 ]; then
+  note "${HOME}/.omniroute/: ${corrupt_count} storage.sqlite.corrupt-* file(s) in last 7 days — sqlite has crashed at least once; investigate /var/log or omniroute logs"
+fi
+DRIFT=$((DRIFT + OR_DRIFT))
 
 # ── 9c. Hermes per-profile irreplaceable paths (state.db, SOUL.md, etc.) ─
 # Mirrors the project_env pattern but for `~/.hermes/profiles/<name>/`.

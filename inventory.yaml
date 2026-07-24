@@ -427,6 +427,20 @@ state_backup:
         system-wide) is also excluded.
       rebuildable_from: "ollama signin (manual re-auth)"
       captured_by: null
+  omniroute_state:
+    # Audit-time drift checks for the OmniRoute runtime state (added
+    # 2026-07-24, PR #105). The state_backup block above already
+    # covers WHAT gets backed up; this block covers WHAT audit.sh
+    # expects to see on a live host. Three drift checks fire under
+    # `[omniroute-state]`:
+    #   1. ~/.omniroute/.env exists + mode 0600 — twin of
+    #      secrets/inventory.yaml#omniroute-env.
+    #   2. ~/.omniroute/storage.sqlite freshness — see max_age_hours
+    #      below. A frozen sqlite = dashboard dead-but-reports-healthy.
+    #   3. storage.sqlite.corrupt-* siblings in last 7 days = advisory
+    #      note (sqlite has crashed; investigate).
+    # All three are wired in scripts/audit.sh [omniroute-state] block.
+    max_age_hours: 48
   oci_block_volume:
     # Oracle Cloud Block Volume snapshot of /dev/sdb. Configured once via
     # `oci bv volume-backup-policy assign` from a laptop with OCI CLI; runs
