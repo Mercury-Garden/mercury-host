@@ -98,6 +98,33 @@ services:
     repo: local
     managed_by: human+mercutio
 
+  - id: omniroute
+    kind: systemd-user
+    unit: systemd/user/omniroute.service
+    binds:
+      - 127.0.0.1:20128
+    nginx_vhost: omniroute.mercury.garden
+    description: |
+      OmniRoute AI gateway + dashboard (multi-provider LLM router,
+      250+ providers, auto-fallback). Installed via pnpm-global,
+      restarted by the devtools-upgrade cron on every successful
+      upgrade (auditOmniroute in scripts/devtools-upgrade.ts — first
+      'dev-stack' entry, 2026-07-24).
+    repo: local
+    managed_by: human+mercutio
+    note: |
+      Loopback bind only. External access via the omniroute.mercury.garden
+      nginx vhost, fronted by oauth2-proxy (single-sign-on with the rest
+      of the Mercury Garden). pnpm cmd-shim is at
+      ~/.local/share/pnpm/bin/omniroute — same install path as
+      openchamber, shares Pool A + the Layer B/D trap. The cron
+      explicitly pins the version (`pnpm add -g omniroute@<version>`)
+      to avoid the pnpm-11 offline-store-prefers-old-version trap.
+      See docs/varlock-known-issues for the openchamber pre-existing
+      ram-resident state (the on-disk hash-dir was GC'd by pnpm on
+      a prior cron tick — the running process is healthy in memory
+      but a fresh restart would need a manual re-install).
+
   - id: obscura-mcp
     kind: systemd-user
     unit: systemd/user/obscura-mcp.service
@@ -131,6 +158,7 @@ services:
       - plans.mercury.garden
       - webhook.mercury.garden
       - memory.mercury.garden
+      - omniroute.mercury.garden
     # NOTE: hermes.mercury.garden exists in sites-available but is NOT symlinked
     # into sites-enabled (file present at 644, no symlink). Remove from inventory
     # when fully decommissioned or re-enable by symlinking.
